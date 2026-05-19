@@ -24,17 +24,42 @@ function json(res, status, payload) {
 }
 
 function extractVideoId(input) {
+  const value = String(input || "").trim();
+  if (!value) return null;
+  if (/^[a-zA-Z0-9_-]{11}$/.test(value)) return value;
+
+  const urlMatch = value.match(/(?:https?:\/\/)?(?:www\.|m\.|music\.)?(?:youtube\.com|youtu\.be)\/[^\s"'<>]+/i);
+  const candidate = urlMatch ? urlMatch[0] : value;
+  const withProtocol = /^[a-z][a-z0-9+.-]*:\/\//i.test(candidate) ? candidate : `https://${candidate}`;
+
   try {
-    const url = new URL(input);
-    if (url.hostname.includes("youtu.be")) return url.pathname.slice(1).split("/")[0];
-    if (url.searchParams.get("v")) return url.searchParams.get("v");
-    const shorts = url.pathname.match(/\/shorts\/([^/?]+)/);
-    if (shorts) return shorts[1];
-    const embed = url.pathname.match(/\/embed\/([^/?]+)/);
-    if (embed) return embed[1];
+    const url = new URL(withProtocol);
+    const host = url.hostname.toLowerCase();
+    const path = url.pathname;
+    const fromQuery = url.searchParams.get("v");
+    if (fromQuery && /^[a-zA-Z0-9_-]{11}$/.test(fromQuery)) return fromQuery;
+    if (host.includes("youtu.be")) {
+      const id = path.split("/").filter(Boolean)[0];
+      if (/^[a-zA-Z0-9_-]{11}$/.test(id || "")) return id;
+    }
+    const pathMatch = path.match(/\/(?:shorts|embed|live|v)\/([a-zA-Z0-9_-]{11})(?:[/?#]|$)/);
+    if (pathMatch) return pathMatch[1];
   } catch {
-    if (/^[a-zA-Z0-9_-]{11}$/.test(input)) return input;
+    // Fall through to regex extraction below.
   }
+
+  const patterns = [
+    /[?&]v=([a-zA-Z0-9_-]{11})(?:[&#]|$)/,
+    /youtu\.be\/([a-zA-Z0-9_-]{11})(?:[/?#]|$)/i,
+    /youtube\.com\/(?:shorts|embed|live|v)\/([a-zA-Z0-9_-]{11})(?:[/?#]|$)/i
+  ];
+  for (const pattern of patterns) {
+    const match = candidate.match(pattern) || value.match(pattern);
+    if (match) return match[1];
+  }
+
+  const loose = value.match(/\b([a-zA-Z0-9_-]{11})\b/);
+  if (loose) return loose[1];
   return null;
 }
 
@@ -609,7 +634,7 @@ function estimatePace(cues) {
 
 async function analyzeYouTube(inputUrl, mode = "stream") {
   const videoId = extractVideoId(inputUrl);
-  if (!videoId) throw new Error("Не смог распознать YouTube ID.");
+  if (!videoId) throw new Error("Не смог распознать YouTube ID");
   const videoUrl = `https://www.youtube.com/watch?v=${videoId}`;
   const [html, oembed] = await Promise.all([
     fetchText(videoUrl),
