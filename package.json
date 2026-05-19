@@ -10,7 +10,7 @@
     "check": "node --check server.js && node --check app.js"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=18"
   },
   "license": "UNLICENSED"
 }
