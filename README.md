@@ -17,6 +17,32 @@ Open:
 http://127.0.0.1:8787
 ```
 
+If `npm` is not available locally, the app can be started directly:
+
+```bash
+node server.js
+```
+
+## Publish To GitHub
+
+From this folder:
+
+```bash
+git status
+git add .
+git commit -m "Prepare Green A for online deploy"
+git branch -M main
+git remote add origin https://github.com/YOUR_USER_OR_ORG/green-a.git
+git push -u origin main
+```
+
+If `origin` already exists, replace it:
+
+```bash
+git remote set-url origin https://github.com/YOUR_USER_OR_ORG/green-a.git
+git push -u origin main
+```
+
 ## Render Deploy
 
 1. Create a GitHub repository and push this folder.
@@ -41,6 +67,18 @@ NODE_ENV=production
 Render automatically provides `PORT`. The server listens on `0.0.0.0`, so it works online.
 
 You can also use the included `render.yaml` as an Infrastructure as Code blueprint.
+
+## Environment
+
+`.env.example` documents the runtime variables:
+
+```text
+NODE_ENV=production
+PORT=8787
+HOST=0.0.0.0
+```
+
+Do not commit `.env` files with real secrets. The current app does not require a YouTube API key; it uses public YouTube page data and fallback extraction.
 
 ## What It Does
 
