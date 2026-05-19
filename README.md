@@ -17,12 +17,6 @@ Open:
 http://127.0.0.1:8787
 ```
 
-Optional YouTube Data API key:
-
-```bash
-YOUTUBE_API_KEY=your_key npm start
-```
-
 ## Render Deploy
 
 1. Create a GitHub repository and push this folder.
@@ -41,22 +35,12 @@ Health Check Path: /healthz
 4. Add environment variable in Render:
 
 ```text
-YOUTUBE_API_KEY=your_youtube_data_api_key
+NODE_ENV=production
 ```
 
 Render automatically provides `PORT`. The server listens on `0.0.0.0`, so it works online.
 
 You can also use the included `render.yaml` as an Infrastructure as Code blueprint.
-
-## YouTube Data API
-
-With `YOUTUBE_API_KEY`, the service uses:
-
-- `search.list` with `order=viewCount` to find popular topical benchmark videos;
-- `videos.list` with `snippet,contentDetails,statistics` to fetch title, description, duration and views;
-- fallback scraping only when the key is missing, quota is exhausted, or the API is temporarily unavailable.
-
-Important: YouTube Data API does not return public caption text with a simple API key. Caption text still uses the current page-based fallback, while Data API improves metadata, duration, views, descriptions, chapters and benchmark search.
 
 ## What It Does
 

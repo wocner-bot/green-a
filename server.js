@@ -7,7 +7,6 @@ const { URL } = require("node:url");
 const root = __dirname;
 const port = Number(process.env.PORT || 8787);
 const host = process.env.HOST || "0.0.0.0";
-const youtubeApiKey = process.env.YOUTUBE_API_KEY || "";
 
 const mime = {
   ".html": "text/html; charset=utf-8",
@@ -105,65 +104,6 @@ function formatViews(value) {
   if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)} млн`;
   if (value >= 1_000) return `${Math.round(value / 1_000)} тыс`;
   return String(value || 0);
-}
-
-function parseIsoDuration(value) {
-  const match = String(value || "").match(/^P(?:(\d+)D)?T?(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?$/);
-  if (!match) return 0;
-  const [, days, hours, minutes, seconds] = match.map((part) => Number(part || 0));
-  return days * 86400 + hours * 3600 + minutes * 60 + seconds;
-}
-
-function youtubeApiUrl(endpoint, params) {
-  const url = new URL(`https://www.googleapis.com/youtube/v3/${endpoint}`);
-  Object.entries({ ...params, key: youtubeApiKey }).forEach(([key, value]) => {
-    if (value !== undefined && value !== null && value !== "") url.searchParams.set(key, String(value));
-  });
-  return url.toString();
-}
-
-async function fetchYouTubeApi(endpoint, params) {
-  if (!youtubeApiKey) throw new Error("YOUTUBE_API_KEY не задан.");
-  return fetchJson(youtubeApiUrl(endpoint, params));
-}
-
-function normalizeApiVideo(item) {
-  const snippet = item.snippet || {};
-  const stats = item.statistics || {};
-  const details = item.contentDetails || {};
-  const videoId = typeof item.id === "string" ? item.id : item.id?.videoId;
-  return {
-    videoId,
-    title: snippet.title || "Без названия",
-    description: snippet.description || "",
-    channelTitle: snippet.channelTitle || "",
-    publishedAt: snippet.publishedAt || "",
-    views: Number(stats.viewCount || 0),
-    viewText: stats.viewCount ? `${formatViews(Number(stats.viewCount))} просмотров` : "",
-    duration: parseIsoDuration(details.duration),
-    caption: details.caption || "",
-    thumbnail: snippet.thumbnails?.maxres?.url || snippet.thumbnails?.high?.url || snippet.thumbnails?.default?.url || "",
-    url: videoId ? `https://www.youtube.com/watch?v=${videoId}` : ""
-  };
-}
-
-async function fetchVideoDetailsFromApi(videoId) {
-  const data = await fetchYouTubeApi("videos", {
-    part: "snippet,contentDetails,statistics",
-    id: videoId
-  });
-  const item = data.items?.[0];
-  return item ? normalizeApiVideo(item) : null;
-}
-
-async function fetchVideosDetailsFromApi(videoIds) {
-  const ids = [...new Set(videoIds.filter(Boolean))].slice(0, 50);
-  if (!ids.length) return [];
-  const data = await fetchYouTubeApi("videos", {
-    part: "snippet,contentDetails,statistics",
-    id: ids.join(",")
-  });
-  return (data.items || []).map(normalizeApiVideo).filter((video) => video.videoId);
 }
 
 function normalizeSearchQuery(topic) {
@@ -671,10 +611,9 @@ async function analyzeYouTube(inputUrl, mode = "stream") {
   const videoId = extractVideoId(inputUrl);
   if (!videoId) throw new Error("Не смог распознать YouTube ID.");
   const videoUrl = `https://www.youtube.com/watch?v=${videoId}`;
-  const [html, oembed, apiVideo] = await Promise.all([
+  const [html, oembed] = await Promise.all([
     fetchText(videoUrl),
-    getOEmbed(videoUrl),
-    fetchVideoDetailsFromApi(videoId).catch(() => null)
+    getOEmbed(videoUrl)
   ]);
   const playerJson = extractBalancedJson(html, "ytInitialPlayerResponse");
   let player = {};
@@ -685,9 +624,9 @@ async function analyzeYouTube(inputUrl, mode = "stream") {
   }
   const details = player.videoDetails || {};
   const micro = player.microformat?.playerMicroformatRenderer || {};
-  const title = apiVideo?.title || details.title || micro.title?.simpleText || oembed.title || "Без названия";
-  const description = apiVideo?.description || details.shortDescription || flattenText(micro.description) || "";
-  const videoDuration = Number(apiVideo?.duration || details.lengthSeconds || micro.lengthSeconds || 0);
+  const title = details.title || micro.title?.simpleText || oembed.title || "Без названия";
+  const description = details.shortDescription || flattenText(micro.description) || "";
+  const videoDuration = Number(details.lengthSeconds || micro.lengthSeconds || 0);
   const tracks = player.captions?.playerCaptionsTracklistRenderer?.captionTracks || [];
   const streamUrl = chooseStreamUrl(player.streamingData || {});
   const [{ transcript, cues, track }, thumbnail] = await Promise.all([
@@ -711,7 +650,6 @@ async function analyzeYouTube(inputUrl, mode = "stream") {
   const combinedForTopic = `${title} ${description} ${chapterText} ${transcript}`;
   const visual = estimateVisualSignals(description, transcript, thumbnail);
   const signals = [
-    apiVideo ? "метаданные, описание, длительность и просмотры получены через YouTube Data API" : "",
     "название и описание страницы YouTube",
     chapterSegments.length ? "главы и тематические таймкоды найдены в описании" : "",
     transcript && track?.sourceType === "manual" ? "ручные субтитры с таймкодами" : "",
@@ -725,8 +663,7 @@ async function analyzeYouTube(inputUrl, mode = "stream") {
     "OCR кадров не выполняется без доступа к видеоряду",
     "качество звука оценено предварительно, без анализа аудиопотока",
     "качество видео оценено предварительно по доступным косвенным сигналам",
-    "комментарии YouTube не подключены; тематические таймкоды берутся из описания",
-    apiVideo ? "YouTube Data API не отдает публичный текст субтитров по API-ключу; субтитры извлекаются отдельным fallback-механизмом со страницы" : "YOUTUBE_API_KEY не задан или API недоступен; метаданные взяты fallback-механизмом"
+    "комментарии YouTube не подключены; тематические таймкоды берутся из описания"
   ];
   return {
     url: videoUrl,
@@ -743,12 +680,7 @@ async function analyzeYouTube(inputUrl, mode = "stream") {
     source: {
       videoId,
       mode,
-      author: apiVideo?.channelTitle || oembed.author_name || details.author || "",
-      apiEnabled: Boolean(apiVideo),
-      views: apiVideo?.views || 0,
-      viewText: apiVideo?.viewText || "",
-      publishedAt: apiVideo?.publishedAt || "",
-      apiCaptionFlag: apiVideo?.caption || "",
+      author: oembed.author_name || details.author || "",
       thumbnail,
       captionLanguage: track?.languageCode || "",
       captionType: track?.sourceType || "",
@@ -789,32 +721,7 @@ function extractSearchVideos(initialData) {
     .filter((video) => video.videoId && video.title && video.views > 0);
 }
 
-async function findPopularCandidatesWithApi(query, currentId) {
-  const search = await fetchYouTubeApi("search", {
-    part: "snippet",
-    q: query,
-    type: "video",
-    order: "viewCount",
-    maxResults: 25,
-    safeSearch: "none",
-    videoEmbeddable: "any"
-  });
-  const ids = (search.items || [])
-    .map((item) => item.id?.videoId)
-    .filter((id) => id && id !== currentId);
-  const detailed = await fetchVideosDetailsFromApi(ids);
-  const order = new Map(ids.map((id, index) => [id, index]));
-  return detailed
-    .filter((video) => video.videoId !== currentId)
-    .filter((video) => isRelevantEducationalResult(video, query))
-    .sort((a, b) => {
-      const byViews = b.views - a.views;
-      return byViews || ((order.get(a.videoId) || 0) - (order.get(b.videoId) || 0));
-    })
-    .slice(0, 8);
-}
-
-async function findPopularCandidatesFromHtml(query, currentId) {
+async function findPopularCandidatesWithHtml(query, currentId) {
   const searchUrl = `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}&sp=CAMSAhAB`;
   const html = await fetchText(searchUrl);
   const initialJson = extractBalancedJson(html, "ytInitialData");
@@ -830,31 +737,14 @@ async function findPopularCandidatesFromHtml(query, currentId) {
 async function findPopularBenchmark(topic, currentUrl = "") {
   const query = normalizeSearchQuery(topic);
   const currentId = extractVideoId(currentUrl || "");
-  let searchSource = "html";
-  let videos = [];
-  if (youtubeApiKey) {
-    try {
-      videos = await findPopularCandidatesWithApi(query, currentId);
-      searchSource = "youtube-data-api";
-    } catch {
-      videos = [];
-    }
-  }
-  if (!videos.length) {
-    videos = await findPopularCandidatesFromHtml(query, currentId);
-    searchSource = "html-fallback";
-  }
+  const videos = await findPopularCandidatesWithHtml(query, currentId);
   if (!videos.length) throw new Error("Не нашел строго релевантные обучающие ролики по этой предметной теме.");
   const leaders = videos.slice(0, 2);
   const analyses = await Promise.all(leaders.map((video) => analyzeYouTube(video.url, "fast")));
   return {
     topic,
     query,
-    searchSource,
-    apiEnabled: searchSource === "youtube-data-api",
-    searchScope: searchSource === "youtube-data-api"
-      ? "YouTube Data API: search.list order=viewCount + videos.list statistics/contentDetails, затем строгий фильтр предмета и учебного формата"
-      : "YouTube public search fallback, сортировка по просмотрам среди релевантных результатов",
+    searchScope: "YouTube public search fallback, сортировка по просмотрам среди релевантных результатов",
     candidates: videos,
     leaders: leaders.map((leader, index) => ({
       ...analyses[index],
