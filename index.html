@@ -1,0 +1,277 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Green A | YouTube Learning Rater</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">Green Argus Index</p>
+        <h1>Дашборд рейтинга обучающих YouTube-видео</h1>
+      </div>
+      <div class="score-pill" aria-live="polite">
+        <span id="headerGrade">-</span>
+        <strong id="headerScore">0</strong>
+      </div>
+    </header>
+
+    <main class="app-shell">
+      <section class="workspace" aria-label="Входные данные">
+        <div class="panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow">Вход</p>
+              <h2>Видео и материалы</h2>
+            </div>
+            <button class="ghost-button" id="loadDemo" type="button">Демо</button>
+          </div>
+
+          <label class="field">
+            <span>YouTube URL</span>
+            <input id="videoUrl" type="url" placeholder="https://www.youtube.com/watch?v=..." autocomplete="off">
+          </label>
+
+          <label class="field">
+            <span>Режим анализа</span>
+            <select id="analysisMode">
+              <option value="stream" selected>Без сохранения файла: субтитры + описание + thumbnail</option>
+              <option value="fast">Быстрый: только метаданные и субтитры</option>
+            </select>
+          </label>
+
+          <div class="fetch-row">
+            <button class="primary-button" id="fetchYouTube" type="button">Запустить анализ</button>
+            <span id="fetchStatus">Вставьте ссылку и запустите автозаполнение.</span>
+          </div>
+
+          <label class="field">
+            <span>Название</span>
+            <input id="videoTitle" type="text" placeholder="Например: Основы машинного обучения за 40 минут">
+          </label>
+
+          <label class="field">
+            <span>Тематика</span>
+            <input id="videoTopic" type="text" list="topicSuggestions" placeholder="Например: AI, SQL, UX, методология">
+            <datalist id="topicSuggestions">
+              <option value="AI и машинное обучение"></option>
+              <option value="Базы данных"></option>
+              <option value="UX и продуктовый дизайн"></option>
+              <option value="Методология обучения"></option>
+              <option value="Маркетинг и продажи"></option>
+            </datalist>
+          </label>
+
+          <label class="field">
+            <span>Транскрипт</span>
+            <textarea id="transcript" rows="8" placeholder="Вставьте расшифровку речи. Чем больше текста, тем точнее эвристическая оценка структуры, примеров, терминов, источников и продажных вставок."></textarea>
+          </label>
+
+          <label class="field">
+            <span>Описание ролика и OCR со слайдов</span>
+            <textarea id="ocrText" rows="5" placeholder="Автоматически подтягивается описание YouTube. OCR кадров можно добавить позже, когда подключим анализ видеоряда."></textarea>
+          </label>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow">Сегментация</p>
+              <h2>Фрагменты 30-90 секунд</h2>
+            </div>
+            <button class="ghost-button" id="addSegment" type="button">Добавить</button>
+          </div>
+          <div class="segment-grid" id="segments"></div>
+          <div class="timecode-audit" id="timecodeAudit" aria-live="polite"></div>
+        </div>
+
+        <div class="panel compact">
+          <div>
+            <p class="eyebrow">Мультимодальные признаки</p>
+            <h2>Техника и коммуникация</h2>
+          </div>
+          <div class="metric-controls">
+            <label>
+              <span>Качество звука</span>
+              <input id="audioQuality" type="range" min="0" max="10" value="8">
+              <b id="audioQualityValue">8</b>
+            </label>
+            <label>
+              <span>Качество видео</span>
+              <input id="videoQuality" type="range" min="0" max="10" value="8">
+              <b id="videoQualityValue">8</b>
+            </label>
+            <label>
+              <span>Читаемость слайдов</span>
+              <input id="slideReadability" type="range" min="0" max="10" value="7">
+              <b id="slideReadabilityValue">7</b>
+            </label>
+            <label>
+              <span>Темп речи</span>
+              <select id="speechPace">
+                <option value="8">Ровный</option>
+                <option value="6">Слегка быстрый</option>
+                <option value="5">Слегка медленный</option>
+                <option value="3">Слишком быстрый</option>
+                <option value="3">Слишком медленный</option>
+              </select>
+            </label>
+          </div>
+        </div>
+      </section>
+
+      <aside class="results" aria-label="Итоги оценки">
+        <section class="rating-hero">
+          <div>
+            <p class="eyebrow">Итоговый рейтинг</p>
+            <div class="grade-row">
+              <span id="grade">-</span>
+              <strong id="score">0</strong>
+            </div>
+          </div>
+          <p id="ratingSummary">Загрузите YouTube URL, чтобы рассчитать рейтинг.</p>
+        </section>
+
+        <section class="panel chart-panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow">Профиль</p>
+              <h2>8 шкал</h2>
+            </div>
+          </div>
+          <canvas id="radar" width="360" height="360" aria-label="Радарная диаграмма оценок"></canvas>
+          <div class="scale-list" id="scaleList"></div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow">Аудитория</p>
+              <h2>Для кого подходит</h2>
+            </div>
+          </div>
+          <div class="audience-list" id="audienceList"></div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow">Сравнение</p>
+              <h2>Образцы выше по теме</h2>
+            </div>
+          </div>
+          <div class="benchmark-list" id="benchmarkList"></div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow">YouTube benchmark</p>
+              <h2>Самый просматриваемый по теме</h2>
+            </div>
+          </div>
+          <div class="popular-benchmark" id="popularBenchmark"></div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow">Аудит</p>
+              <h2>Красные флаги</h2>
+            </div>
+          </div>
+          <div class="risk-list" id="riskList"></div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow">Доказательность</p>
+              <h2>Таймкоды</h2>
+            </div>
+          </div>
+          <div class="evidence-list" id="evidenceList"></div>
+        </section>
+      </aside>
+    </main>
+
+    <section class="dashboard-shell" aria-label="Дашборд ранжирования">
+      <div class="dashboard-summary">
+        <article>
+          <span>Видео</span>
+          <strong id="videoCount">0</strong>
+        </article>
+        <article>
+          <span>Средний балл</span>
+          <strong id="averageScore">0</strong>
+        </article>
+        <article>
+          <span>Лидер</span>
+          <strong id="leaderGrade">-</strong>
+        </article>
+        <article>
+          <span>Риски</span>
+          <strong id="riskCount">0</strong>
+        </article>
+        <article>
+          <span>Темы</span>
+          <strong id="topicCount">0</strong>
+        </article>
+      </div>
+
+      <div class="panel leaderboard-panel">
+        <div class="panel-head">
+          <div>
+            <p class="eyebrow">Ранжирование</p>
+            <h2>Несколько роликов</h2>
+          </div>
+          <div class="actions">
+            <button class="ghost-button" id="loadDashboardDemo" type="button">Демо-набор</button>
+            <button class="primary-button" id="saveVideo" type="button">Сохранить ролик</button>
+          </div>
+        </div>
+        <div class="ranking-table" id="rankingTable"></div>
+      </div>
+
+      <div class="panel topics-panel">
+        <div class="panel-head">
+          <div>
+            <p class="eyebrow">Тематики</p>
+            <h2>Группы роликов</h2>
+          </div>
+        </div>
+        <div class="topic-groups" id="topicGroups"></div>
+      </div>
+
+      <div class="panel class-guide-panel">
+        <div class="panel-head">
+          <div>
+            <p class="eyebrow">Классы</p>
+            <h2>Как читать A-E</h2>
+          </div>
+        </div>
+        <div class="class-guide">
+          <article><strong>A</strong><span>85-100</span><p>Сильное обучающее видео: глубина, практика, структура и доказательность.</p></article>
+          <article><strong>B</strong><span>70-84</span><p>Хороший материал с понятными зонами усиления.</p></article>
+          <article><strong>C</strong><span>55-69</span><p>Средний ролик: полезен, но методически неровный.</p></article>
+          <article><strong>D</strong><span>40-54</span><p>Слабое обучение: есть фрагменты пользы, но много рисков.</p></article>
+          <article><strong>E</strong><span>0-39</span><p>Плохо подходит для обучения без серьезной переработки.</p></article>
+        </div>
+      </div>
+
+      <div class="panel comparison-panel">
+        <div class="panel-head">
+          <div>
+            <p class="eyebrow">Сравнение</p>
+            <h2>Средние шкалы подборки</h2>
+          </div>
+        </div>
+        <div class="comparison-grid" id="comparisonGrid"></div>
+      </div>
+    </section>
+
+    <script src="app.js"></script>
+  </body>
+</html>
