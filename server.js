@@ -800,11 +800,12 @@ async function serveStatic(req, res, pathname) {
 
 const server = http.createServer(async (req, res) => {
   const requestUrl = new URL(req.url, `http://${req.headers.host}`);
-  if (requestUrl.pathname === "/healthz") {
+  const pathname = requestUrl.pathname.replace(/\/+$/, "") || "/";
+  if (pathname === "/healthz") {
     json(res, 200, { ok: true, service: "green-a" });
     return;
   }
-  if (requestUrl.pathname === "/api/youtube") {
+  if (pathname === "/api/youtube") {
     try {
       const url = requestUrl.searchParams.get("url") || "";
       const mode = requestUrl.searchParams.get("mode") || "stream";
@@ -815,7 +816,7 @@ const server = http.createServer(async (req, res) => {
     }
     return;
   }
-  if (requestUrl.pathname === "/api/popular") {
+  if (pathname === "/api/popular") {
     try {
       const topic = requestUrl.searchParams.get("topic") || "";
       const currentUrl = requestUrl.searchParams.get("currentUrl") || "";
@@ -825,6 +826,10 @@ const server = http.createServer(async (req, res) => {
     } catch (error) {
       json(res, 400, { error: error.message });
     }
+    return;
+  }
+  if (pathname.startsWith("/api/")) {
+    json(res, 404, { error: "Неизвестный API endpoint." });
     return;
   }
   await serveStatic(req, res, decodeURIComponent(requestUrl.pathname));

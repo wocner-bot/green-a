@@ -68,6 +68,31 @@ Render automatically provides `PORT`. The server listens on `0.0.0.0`, so it wor
 
 You can also use the included `render.yaml` as an Infrastructure as Code blueprint.
 
+## GitHub Pages + Online API
+
+GitHub Pages can host only the static frontend. It does **not** run `server.js`, so `/api/youtube` and `/api/popular` will return an HTML page instead of JSON unless a Node backend is deployed separately.
+
+Recommended setup:
+
+1. Deploy this repository as a Render Web Service.
+2. Copy the Render URL, for example:
+
+```text
+https://green-a.onrender.com
+```
+
+3. If your Render URL differs, edit `config.js`:
+
+```js
+window.GREEN_A_CONFIG = {
+  apiBase: "https://YOUR-RENDER-SERVICE.onrender.com"
+};
+```
+
+4. Commit and push `config.js`.
+
+When the app is opened from `*.github.io`, it automatically tries `https://green-a.onrender.com` unless `config.js` contains another `apiBase`.
+
 ## Environment
 
 `.env.example` documents the runtime variables:
@@ -95,6 +120,7 @@ Do not commit `.env` files with real secrets. The current app does not require a
 
 ```text
 index.html   Static UI
+config.js    Frontend backend URL config for GitHub Pages or another static host
 styles.css   Dashboard styling
 app.js       Client-side scoring and rendering
 server.js    Node server, YouTube extraction and benchmark API

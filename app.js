@@ -207,13 +207,33 @@ function benchmarkTopic(video) {
 }
 
 function apiBase() {
+  const configured = window.GREEN_A_CONFIG?.apiBase || window.GREEN_A_API_BASE || localStorage.getItem("GREEN_A_API_BASE");
+  if (configured) return String(configured).replace(/\/+$/, "");
   if (location.protocol === "file:") return "http://127.0.0.1:8787";
+  if (/\.github\.io$/i.test(location.hostname)) return "https://green-a.onrender.com";
   return location.origin;
 }
 
 function setFetchStatus(message, tone = "neutral") {
   els.fetchStatus.textContent = message;
   els.fetchStatus.dataset.tone = tone;
+}
+
+async function readJsonResponse(response) {
+  const contentType = response.headers.get("content-type") || "";
+  const text = await response.text();
+  if (!contentType.includes("application/json")) {
+    const looksLikeHtml = /^\s*</.test(text);
+    if (looksLikeHtml) {
+      throw new Error(`API вернул HTML-страницу вместо JSON. Сейчас frontend обращается к ${apiBase()}. Если сайт открыт на GitHub Pages, укажите backend Node-сервиса в config.js, например https://green-a.onrender.com.`);
+    }
+    throw new Error(`API вернул не JSON (${contentType || "без content-type"}).`);
+  }
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new Error("API вернул некорректный JSON.");
+  }
 }
 
 function applyYouTubeData(video) {
@@ -253,7 +273,7 @@ async function fetchYouTubeData() {
   try {
     const mode = encodeURIComponent(els.analysisMode.value);
     const response = await fetch(`${apiBase()}/api/youtube?url=${encodeURIComponent(url)}&mode=${mode}`);
-    const payload = await response.json();
+    const payload = await readJsonResponse(response);
     if (!response.ok) throw new Error(payload.error || "YouTube не вернул данные.");
     applyYouTubeData(payload);
     const transcriptMessage = payload.source?.transcriptAvailable
@@ -964,7 +984,7 @@ async function fetchPopularBenchmark() {
   renderPopularBenchmark(current);
   try {
     const response = await fetch(`${apiBase()}/api/popular?topic=${encodeURIComponent(subject)}&currentUrl=${encodeURIComponent(current.url)}`);
-    const payload = await response.json();
+    const payload = await readJsonResponse(response);
     if (!response.ok) throw new Error(payload.error || "Не удалось найти популярный ролик.");
     state.popularBenchmark = payload;
     state.popularStatus = "ready";
