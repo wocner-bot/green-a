@@ -113,3 +113,29 @@ test('Includes educational video by title + description when transcript is missi
   assert.equal(result.exclude, false, 'Educational description should not be excluded when transcript missing');
   assert.equal(result.classification, 'educational', 'Educational description should classify as educational');
 });
+
+test('Marks title-only beginner lesson as uncertain instead of non-educational when data is sparse', () => {
+  const data = {
+    title: '1. Грузинский язык с нуля - Я есть, ты есть',
+    description: '',
+    transcript: ''
+  };
+  const result = assessEducationalFit(data, [], {});
+  assert.equal(result.exclude, false, 'Sparse title-only beginner lesson should not be hard-excluded');
+  assert.equal(result.classification, 'uncertain', 'Sparse title-only lesson should be uncertain');
+});
+
+test('Classifies lesson as educational when description has objective and practice even without transcript', () => {
+  const data = {
+    title: 'Грузинский язык с нуля. Урок 1',
+    description: 'Вы научитесь строить базовые фразы. Пошаговый разбор, примеры и упражнение для самостоятельной проверки.',
+    transcript: ''
+  };
+  const result = assessEducationalFit(data, [
+    { time: '00:00-00:40', type: 'теория', source: 'description' },
+    { time: '00:40-01:20', type: 'пример', source: 'description' },
+    { time: '01:20-02:00', type: 'практика', source: 'description' }
+  ], {});
+  assert.equal(result.exclude, false, 'Lesson with description objective/practice should not be excluded');
+  assert.equal(result.classification, 'educational', 'Lesson with clear description teaching mechanics should be educational');
+});
