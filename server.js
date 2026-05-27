@@ -1679,6 +1679,64 @@ async function fetchCaptionsViaYtDlp(videoUrl, preferredLanguages = []) {
   return null;
 }
 
+function uniqueLanguageOrder(list = []) {
+  const out = [];
+  for (const value of list) {
+    const code = String(value || "").trim().toLowerCase();
+    if (!code) continue;
+    if (!out.includes(code)) out.push(code);
+  }
+  return out;
+}
+
+async function fetchCaptionsViaTimedtext(videoId, preferredLanguages = []) {
+  if (!videoId) return null;
+  const languages = uniqueLanguageOrder([
+    ...preferredLanguages,
+    "ru",
+    "en",
+    "uk",
+    "es",
+    "pt",
+    "de",
+    "fr"
+  ]);
+  const bases = [
+    "https://www.youtube.com/api/timedtext",
+    "https://video.google.com/timedtext"
+  ];
+  const formats = ["json3", "vtt"];
+  for (const lang of languages) {
+    for (const base of bases) {
+      for (const format of formats) {
+        for (const kind of ["asr", ""]) {
+          try {
+            const url = new URL(base);
+            url.searchParams.set("v", videoId);
+            url.searchParams.set("lang", lang);
+            url.searchParams.set("fmt", format);
+            if (kind) url.searchParams.set("kind", kind);
+            const result = await fetchCaptionFromUrl(url.toString(), format);
+            if (!result.transcript || result.transcript.length < 30) continue;
+            return {
+              ...result,
+              track: {
+                baseUrl: url.toString(),
+                languageCode: lang,
+                sourceType: kind === "asr" ? "automatic" : "manual",
+                name: { simpleText: `${lang} (${kind === "asr" ? "automatic" : "manual"}, timedtext)` }
+              }
+            };
+          } catch {
+            // Try next variant.
+          }
+        }
+      }
+    }
+  }
+  return null;
+}
+
 async function fetchBestCaptions(tracks, videoUrl = "") {
   for (const track of orderCaptionTracks(tracks)) {
     try {
@@ -1689,6 +1747,8 @@ async function fetchBestCaptions(tracks, videoUrl = "") {
     }
   }
   const preferred = orderCaptionTracks(tracks).map((track) => track.languageCode).filter(Boolean);
+  const timedtextResult = await fetchCaptionsViaTimedtext(extractVideoId(videoUrl), preferred);
+  if (timedtextResult?.transcript) return timedtextResult;
   const ytDlpResult = await fetchCaptionsViaYtDlp(videoUrl, preferred);
   if (ytDlpResult?.transcript) return ytDlpResult;
   return { transcript: "", cues: [], track: orderCaptionTracks(tracks)[0] };

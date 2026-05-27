@@ -74,3 +74,42 @@ test('Includes Russian step-by-step tool tutorial with assignment', () => {
   ], {});
   assert.equal(result.exclude, false, 'Step-by-step tutorial with assignment should be included');
 });
+
+test('Marks borderline explainer as uncertain (not excluded)', () => {
+  const data = {
+    title: 'Разбор темы: что такое event loop',
+    transcript: 'В этом видео разберем базовую идею event loop и почему это важно. Без практического задания, только концептуальное объяснение.'
+  };
+  const result = assessEducationalFit(data, [
+    { time: '00:00-00:50', type: 'теория', note: 'концептуальное объяснение' },
+    { time: '00:50-01:35', type: 'пример', note: 'упрощенный пример' }
+  ], {});
+  assert.equal(result.exclude, false, 'Borderline explainer should not be force-excluded');
+  assert.equal(result.uncertain, true, 'Borderline explainer should be marked uncertain');
+  assert.equal(result.classification, 'uncertain', 'Classification should be uncertain');
+});
+
+test('Excludes talk-show guest format by title', () => {
+  const data = {
+    title: 'Школа Злословия. Гость программы - Рената Литвинова',
+    transcript: 'разговор о жизни, интервью и обсуждение личного опыта'
+  };
+  const result = assessEducationalFit(data, [], {});
+  assert.equal(result.exclude, true, 'Talk-show guest format should be excluded');
+  assert.equal(result.classification, 'non-educational', 'Talk-show guest format should be non-educational');
+});
+
+test('Includes educational video by title + description when transcript is missing', () => {
+  const data = {
+    title: 'Урок по алгебре: квадратные уравнения',
+    description: 'Цель урока: научиться решать квадратные уравнения. Пошаговый разбор, пример и практическое задание для самостоятельной проверки.',
+    transcript: ''
+  };
+  const result = assessEducationalFit(data, [
+    { time: '00:00-00:45', type: 'теория', source: 'description' },
+    { time: '00:45-01:30', type: 'пример', source: 'description' },
+    { time: '01:30-02:10', type: 'практика', source: 'description' }
+  ], {});
+  assert.equal(result.exclude, false, 'Educational description should not be excluded when transcript missing');
+  assert.equal(result.classification, 'educational', 'Educational description should classify as educational');
+});

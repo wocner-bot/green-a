@@ -86,6 +86,7 @@ const state = {
   popularStatus: "idle",
   popularTopic: "",
   hasLoadedVideo: false,
+  videoDescription: "",
   segments: [],
   visualObservations: [],
   mediaAnalysis: null
@@ -157,10 +158,12 @@ function getInputs() {
   const ocr = els.ocrText.value.trim();
   const title = els.videoTitle.value.trim();
   const topic = els.videoTopic.value.trim();
-  const combined = `${title}\n${topic}\n${transcript}\n${ocr}`;
+  const description = String(state.videoDescription || "").trim();
+  const combined = `${title}\n${topic}\n${description}\n${transcript}\n${ocr}`;
   return {
     title,
     topic,
+    description,
     transcript,
     ocr,
     combined,
@@ -451,6 +454,7 @@ function applyYouTubeData(video) {
   els.videoTitle.value = video.title || "";
   els.videoTopic.value = video.topic || classification.label;
   els.transcript.value = video.transcript || "";
+  state.videoDescription = video.description || "";
   state.visualObservations = Array.isArray(video.visualObservations)
     ? video.visualObservations.map((item) => ({ ...item }))
     : [];
@@ -527,6 +531,7 @@ function currentVideoPayload() {
     url: els.videoUrl.value.trim(),
     title: els.videoTitle.value.trim() || "Без названия",
     topic: els.videoTopic.value.trim() || topicClassification.label,
+    description: String(state.videoDescription || "").trim(),
     topicClassification,
     transcript: els.transcript.value.trim(),
     ocr: els.ocrText.value.trim(),
@@ -551,9 +556,10 @@ function calculateScores(video = null) {
     ? {
         title: (video.title || "").trim(),
         topic: (video.topic || "").trim(),
+        description: (video.description || "").trim(),
         transcript: (video.transcript || "").trim(),
         ocr: (video.ocr || "").trim(),
-        combined: `${video.title || ""}\n${video.topic || ""}\n${video.transcript || ""}\n${video.ocr || ""}\n${visualText}`,
+        combined: `${video.title || ""}\n${video.topic || ""}\n${video.description || ""}\n${video.transcript || ""}\n${video.ocr || ""}\n${visualText}`,
         audio: Number(video.audio),
         video: Number(video.video),
         slides: Number(video.slides),
@@ -641,7 +647,9 @@ function analyzeVideo(video) {
 }
 
 function assessEducationalFit(data = {}, segments = [], signals = {}) {
-  const text = (data.combined || `${data.title || ""}\n${data.topic || ""}\n${data.transcript || ""}\n${data.ocr || ""}`).toLowerCase();
+  const description = String(data.description || "").toLowerCase();
+  const transcriptText = String(data.transcript || "").toLowerCase();
+  const text = `${data.title || ""}\n${data.topic || ""}\n${description}\n${transcriptText}`.toLowerCase();
   const title = (data.title || "").toLowerCase();
   const titleAndTopic = `${data.title || ""} ${data.topic || ""}`.toLowerCase();
   const segmentText = segments.map((segment) => `${segment.type || ""} ${segment.note || ""}`).join(" ").toLowerCase();
@@ -674,6 +682,10 @@ function assessEducationalFit(data = {}, segments = [], signals = {}) {
     "интервью", "беседа", "подкаст", "новости", "реакция", "vlog", "развлекатель",
     "документальный", "обзор", "биография", "размышления", "мнение", "opinion", "ток-шоу",
     "реклама", "реклам", "пранк", "юмор", "концерт", "клип", "стрим", "трансляция", "игра", "игровой"
+  ]);
+  const titleMediaMarkers = regexHits(title, [
+    /official\s+video|music\s+video|lyrics|4k\s+remaster|\blive\b|feat\.?/i,
+    /гость программы|школа злословия|концерт|клип|официальн(ый|ое)\s+клип/i
   ]);
 
   const motivationalMarkers = countHits(text, [
@@ -708,49 +720,99 @@ function assessEducationalFit(data = {}, segments = [], signals = {}) {
   const hasVisualTeachingCore = hasVisualStructure && signals.visualInstructionHits > 1;
   const hasLectureFormat = /лекци|lecture|chapter|глава|серия|часть|модуль|course|курс/i.test(text);
   const hasCourseLikeStructure = hasChapterStructure || hasCaptionStructure || hasSegmentedLearningFlow;
+  const hasHowToTitle = /(^|\s)как\s+(сделать|решить|настроить|использовать|выучить|понять|работает|работать)\b/i.test(title);
+  const titleTeachingHits = regexHits(title, [/урок|лекци|tutorial|lesson|course|обуч|разбор|гайд|guide|how to/i]);
+  const descriptionTeachingHits = countHits(description, [
+    "цель урока", "вы научитесь", "пошаг", "разбор", "пример", "упражнение", "задание", "practice", "exercise", "lesson plan", "learning objective"
+  ]);
+  const transcriptTeachingHits = countHits(transcriptText, [
+    "цель урока", "вы научитесь", "пошаг", "разбор", "пример", "упражнение", "задание", "проверка", "practice", "exercise", "assignment", "quiz", "step by step"
+  ]);
+  const totalTeachingEvidence = titleTeachingHits + Math.min(3, descriptionTeachingHits) + Math.min(4, transcriptTeachingHits) + (hasCourseLikeStructure ? 1 : 0);
 
-  const hasInstructionalFormat = formatHits > 0 || /урок|курс|обуч|tutorial|lesson|course/i.test(title);
+  const hasInstructionalFormat = formatHits > 0 || /урок|курс|обуч|tutorial|lesson|course/i.test(title) || hasHowToTitle;
+  const explicitEducationalTitle = /урок|лекци|tutorial|lesson|course|обуч|разбор|гайд|guide|how to/i.test(title);
+  const talkShowTitle = /гость программы|ток-шоу|подкаст|интервью|шоу/i.test(title);
   const hasMethod = methodHits > 0 || hasLearningSegments;
   const hasPractice = practiceOrCheckHits > 0 && !/нет[^.\n]{0,35}практик|без\s+практик|no\s+practice|without\s+practice/i.test(text);
   const hasGoal = goalHits > 0 && !/нет[^.\n]{0,35}цел[ьи]|без\s+цели|no\s+clear\s+goal|without\s+goal/i.test(text);
   const mechanicsCount = [hasMethod, hasPractice, hasGoal, hasCourseLikeStructure || hasLectureFormat || hasVisualTeachingCore].filter(Boolean).length;
 
+  const hasOutcomeSignal = hasPractice || hasGoal || hasChapterStructure || hasSegmentedLearningFlow;
   const hasStrongTeachingCore = (hasMethod && hasGoal) || (hasPractice && (hasMethod || hasCourseLikeStructure || hasLectureFormat || hasVisualTeachingCore));
   const hasEducationalIntent = titleEducationHits > 0 || formatHits >= 1 || (subjectMatterHits > 0 && (hasInstructionalFormat || hasMethod || hasLectureFormat || hasCourseLikeStructure));
   const hasEducationalMechanics = hasMethod || hasPractice || hasGoal || hasCourseLikeStructure || hasLectureFormat || hasVisualTeachingCore;
-  const hasEducationalSignal = hasStrongTeachingCore || (hasEducationalIntent && hasEducationalMechanics && mechanicsCount >= 2);
+  const hasEducationalSignal = hasStrongTeachingCore || (hasEducationalIntent && hasEducationalMechanics && mechanicsCount >= 1);
 
   const learningEvidence = [hasInstructionalFormat, hasMethod, hasPractice, hasGoal, hasChapterStructure || hasCaptionStructure || hasSegmentedLearningFlow, mechanicsCount >= 2].filter(Boolean).length;
 
   const score = Math.max(0, Math.min(10,
-    1.5 +
-    (hasInstructionalFormat ? 2 : 0) +
-    (hasMethod ? 2 : 0) +
-    (hasPractice ? 1.5 : 0) +
+    2.2 +
+    (hasInstructionalFormat ? 1.6 : 0) +
+    (hasMethod ? 1.8 : 0) +
+    (hasPractice ? 1.4 : 0) +
     (hasGoal ? 1.2 : 0) +
-    (hasChapterStructure ? 1.2 : 0) +
+    (hasChapterStructure ? 1.0 : 0) +
     (hasSegmentedLearningFlow ? 0.8 : 0) +
-    (mechanicsCount >= 2 ? 0.9 : 0) +
-    (hasEducationalIntent ? 0.9 : 0) -
-    (hardNonLearningHits ? Math.min(hardNonLearningHits, 3) * 0.9 : 0)
+    (mechanicsCount >= 2 ? 0.8 : 0) +
+    (hasEducationalIntent ? 0.7 : 0) +
+    (hasHowToTitle ? 0.8 : 0) +
+    (subjectMatterHits > 0 ? 0.4 : 0) +
+    (hasVisualTeachingCore ? 0.3 : 0) -
+    (hardNonLearningHits ? Math.min(hardNonLearningHits, 3) * 0.65 : 0) -
+    (salesPushMarkers >= 3 ? 0.7 : 0)
   ));
 
-  const strongInfotainment = hardNonLearningHits > 0 && mechanicsCount < 2;
+  const strongInfotainment = (hardNonLearningHits >= 2 || titleMediaMarkers > 0) && mechanicsCount === 0 && !hasEducationalMechanics;
   const onlyHomeworkOrViewing = hasPractice && !hasEducationalSignal && /домашнее задание|приятного просмотра/i.test(text);
 
-  const isSelfHelpMotivational = (motivationalMarkers >= 2 || quickPromiseMarkers >= 3) && !hasPractice && !hasMethod;
-  const isSalesHeavy = salesPushMarkers >= 2 && (guaranteeMarkers >= 1 || mechanicsCount < 2);
-  const hasOverpromising = (guaranteeMarkers >= 2 || quickPromiseMarkers >= 4) && !hasGoal && !hasMethod;
-  const isAggressiveMarketing = quickPromiseMarkers >= 4 && salesPushMarkers >= 3;
-  const noTeachingMechanism = mechanicsCount < 2;
-  const isOverviewWithoutTeachingCore = /обзор|review|discussion|react/i.test(text) && !hasGoal && !hasPractice;
+  const isSelfHelpMotivational = (motivationalMarkers >= 2 || quickPromiseMarkers >= 3) && mechanicsCount === 0;
+  const isSalesHeavy = salesPushMarkers >= 3 && mechanicsCount < 2;
+  const hasOverpromising = (guaranteeMarkers >= 2 || quickPromiseMarkers >= 4) && mechanicsCount === 0;
+  const isAggressiveMarketing = quickPromiseMarkers >= 4 && salesPushMarkers >= 3 && mechanicsCount === 0;
+  const noTeachingMechanism = mechanicsCount === 0;
+  const isOverviewWithoutTeachingCore = /обзор|review|discussion|react/i.test(text) && !hasGoal && !hasPractice && !hasChapterStructure;
   const isSalesLeadWithoutPractice = salesPushMarkers >= 1 && !hasPractice && !hasGoal && !hasCourseLikeStructure;
-  const exclude = !hasEducationalSignal || strongInfotainment || onlyHomeworkOrViewing || score < 2.5 || isSalesHeavy || hasOverpromising || isSelfHelpMotivational || isAggressiveMarketing || noTeachingMechanism || isOverviewWithoutTeachingCore || isSalesLeadWithoutPractice;
-  const eligible = !exclude && score >= 5;
-  const weak = !exclude && score < 5;
+  const isCourseOverviewSales = /курс|course/i.test(text) && /обзор|review/i.test(text) && !hasOutcomeSignal && salesPushMarkers >= 1;
+  const hardNegativeCount = [
+    strongInfotainment,
+    onlyHomeworkOrViewing,
+    isSelfHelpMotivational,
+    isSalesHeavy,
+    hasOverpromising,
+    isAggressiveMarketing,
+    isOverviewWithoutTeachingCore,
+    isSalesLeadWithoutPractice
+  ].filter(Boolean).length;
+
+  const nonEducational = score < 2.8 ||
+    (talkShowTitle && !explicitEducationalTitle) ||
+    (!hasEducationalSignal && totalTeachingEvidence <= 1 && hardNonLearningHits >= 1) ||
+    (!hasStrongTeachingCore && score < 4.2 && (isOverviewWithoutTeachingCore || hardNonLearningHits > 0 || learningEvidence <= 1)) ||
+    ((hardNonLearningHits >= 3 && titleMediaMarkers > 0) && !hasChapterStructure) ||
+    ((hardNonLearningHits >= 3 || titleMediaMarkers > 0) && !hasOutcomeSignal && !hasStrongTeachingCore) ||
+    (noTeachingMechanism && learningEvidence <= 1 && (hardNonLearningHits >= 2 || hardNegativeCount >= 2)) ||
+    (motivationalMarkers >= 2 && quickPromiseMarkers >= 2 && salesPushMarkers >= 2) ||
+    (salesPushMarkers >= 3 && guaranteeMarkers >= 2) ||
+    (isCourseOverviewSales && !hasOutcomeSignal) ||
+    ((isSalesHeavy || isSelfHelpMotivational || isAggressiveMarketing || isOverviewWithoutTeachingCore || isSalesLeadWithoutPractice || isCourseOverviewSales) && !hasEducationalSignal);
+  const educational = !nonEducational && (
+    (score >= 6 && mechanicsCount >= 2 && hasEducationalSignal && hasOutcomeSignal && hardNonLearningHits < 3 && titleMediaMarkers === 0) ||
+    (score >= 5.2 && titleTeachingHits >= 1 && descriptionTeachingHits >= 2 && hardNonLearningHits < 3 && !isSalesHeavy) ||
+    (score >= 5.2 && hasStrongTeachingCore && learningEvidence >= 3 && hardNegativeCount <= 1)
+  );
+  const uncertain = !nonEducational && !educational;
+  const exclude = nonEducational;
+  const eligible = educational;
+  const weak = uncertain;
+  const classification = nonEducational ? "non-educational" : (educational ? "educational" : "uncertain");
+  const confidence = educational
+    ? (score >= 7 && hardNegativeCount === 0 ? "high" : "medium")
+    : (uncertain ? (score >= 5 ? "medium" : "low") : "low");
 
   const reasons = [];
   if (hardNonLearningHits) reasons.push(`медийные маркеры: ${hardNonLearningHits}`);
+  if (titleMediaMarkers) reasons.push(`медийные маркеры в названии: ${titleMediaMarkers}`);
   if (motivationalMarkers >= 2) reasons.push(`мотивационный контент: ${motivationalMarkers}`);
   if (quickPromiseMarkers >= 3) reasons.push(`обещания быстрого результата: ${quickPromiseMarkers}`);
   if (salesPushMarkers >= 3) reasons.push(`агрессивные продажи: ${salesPushMarkers}`);
@@ -759,21 +821,26 @@ function assessEducationalFit(data = {}, segments = [], signals = {}) {
   if (isSalesHeavy) reasons.push("контент перегружен продажами вместо обучения");
   if (hasOverpromising) reasons.push("видео содержит завышенные обещания без методологии");
   if (isSelfHelpMotivational) reasons.push("контент мотивационный, без конкретной методики и практики");
-  if (noTeachingMechanism) reasons.push("недостаточно учебной механики: нет цели/метода/практики в достаточном объеме");
+  if (noTeachingMechanism) reasons.push("недостаточно учебной механики: нет цели/метода/практики");
   if (isOverviewWithoutTeachingCore) reasons.push("обзорный формат без явной учебной цели и практики");
   if (isSalesLeadWithoutPractice) reasons.push("продвижение курса преобладает над учебной частью");
-  if (weak) reasons.push("учебный формат слабый: рейтинг будет снижен");
-  if (exclude) reasons.push("слишком мало признаков обучения или формат явно медийный");
+  if (isCourseOverviewSales) reasons.push("обзор курса с оффером без учебной практики/цели");
+  if (uncertain) reasons.push("пограничный случай: нужны дополнительные подтверждения учебной механики");
+  if (exclude) reasons.push("не хватает признаков обучающего формата или преобладает медийно-маркетинговая подача");
 
   return {
     eligible,
     weak,
+    uncertain,
     exclude,
+    classification,
+    confidence,
     score: Number(score.toFixed(1)),
     learningEvidence,
     reasons,
     markers: {
       hardNonLearningHits,
+      titleMediaMarkers,
       motivationalMarkers,
       quickPromiseMarkers,
       salesPushMarkers,
@@ -1095,7 +1162,7 @@ function buildRisks(scores, flags, data) {
     risks.push(["high", "Не классифицировано как обучающее видео", `По описанию и содержанию не хватает учебной механики: цели, шагов, практики или проверки понимания. ${flags.educationalFit.reasons.join("; ")}.`]);
     return risks;
   }
-  if (flags.educationalFit.weak) risks.push(["medium", "Слабый обучающий формат", `Видео похоже на обучающее, но учебная механика выражена слабо. Оценка обучающего формата: ${flags.educationalFit.score}/10.`]);
+  if (flags.educationalFit.weak) risks.push(["medium", "Пограничный обучающий формат", `Видео частично похоже на обучающее, но признаков учебной механики пока недостаточно для высокой уверенности. Оценка формата: ${flags.educationalFit.score}/10.`]);
   const majorProfile = majorQualityProfile(scores);
   if (majorProfile.weighted < 5) {
     risks.push(["high", "Слабое методологическое ядро", "Итог ограничен не одной глубиной, а связкой ключевых шкал: содержательность, педагогика, структура и достоверность."]);
@@ -1140,7 +1207,7 @@ function renderEvidence(scores, flags = null) {
   if (flags?.educationalFit?.exclude) {
     rows.push(["Классификация", `Видео исключено из рейтинга как не обучающее. Причины: ${flags.educationalFit.reasons.join("; ")}.`]);
   } else if (flags?.educationalFit?.weak) {
-    rows.push(["Классификация", `Видео допущено к рейтингу со штрафом за слабый обучающий формат. Оценка формата: ${flags.educationalFit.score}/10. Причины: ${flags.educationalFit.reasons.join("; ")}.`]);
+    rows.push(["Классификация", `Видео отмечено как погранично обучающее. Оценка формата: ${flags.educationalFit.score}/10. Причины: ${flags.educationalFit.reasons.join("; ")}.`]);
   }
   if (flags?.visualObservationCount) {
     rows.push(["Визуальный слой", `Учтено визуальных наблюдений: ${flags.visualObservationCount}. ${flags.visualFallbackActive ? "Транскрипт слабый или отсутствует, поэтому экран влияет на оценку сильнее." : "Экран используется как дополнительное доказательство к речи и сегментам."}`]);
@@ -1767,6 +1834,7 @@ function loadVideo(videoId) {
   els.videoUrl.value = video.url;
   els.videoTitle.value = video.title;
   els.videoTopic.value = video.topic || topicLabel(video);
+  state.videoDescription = video.description || "";
   els.transcript.value = video.transcript;
   els.ocrText.value = video.ocr;
   els.audioQuality.value = video.audio;
@@ -1886,7 +1954,7 @@ function update() {
   els.score.textContent = total ?? NOT_AVAILABLE_LABEL;
   els.grade.textContent = grade;
   els.ratingSummary.textContent = !isExcluded
-    ? [summaryFor(total), flags.educationalFit.weak ? `Обучающий формат выражен слабо: ${flags.educationalFit.score}/10.` : "", ratingCapNote(scores)].filter(Boolean).join(" ")
+    ? [summaryFor(total), flags.educationalFit.weak ? `Пограничный обучающий формат: уверенность ${flags.educationalFit.confidence || "low"}, оценка ${flags.educationalFit.score}/10.` : "", ratingCapNote(scores)].filter(Boolean).join(" ")
     : `Ролик исключен из образовательного рейтинга и помечен как ${NOT_AVAILABLE_LABEL}: по описанию и содержанию это скорее познавательный/медийный материал без достаточной учебной механики.`;
 
   els.transcriptView.textContent = data.transcript.trim() || "Транскрипт отсутствует.";
@@ -1932,6 +2000,7 @@ document.querySelector("#loadDemo").addEventListener("click", () => {
   els.videoUrl.value = demo.url;
   els.videoTitle.value = demo.title;
   els.videoTopic.value = demo.topic;
+  state.videoDescription = demo.description || "";
   els.transcript.value = demo.transcript;
   els.ocrText.value = demo.ocr;
   state.segments = demo.segments.map((segment) => ({ ...segment }));
@@ -2007,6 +2076,7 @@ els.segments.addEventListener("click", (event) => {
       state.popularStatus = "idle";
       state.visualObservations = [];
       state.mediaAnalysis = null;
+      state.videoDescription = "";
     }
     syncRangeLabels();
     update();
