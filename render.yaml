@@ -11,7 +11,23 @@ services:
         value: production
       - key: HOST
         value: 0.0.0.0
-      - key: PORT
-        value: 3000
       - key: YOUTUBE_API_KEY
-        fromEnv: YOUTUBE_API_KEY
+        sync: false
+      - key: VIDEO_ANALYSIS_PROVIDER
+        value: local
+      - key: AZURE_VIDEO_INDEXER_ACCOUNT_ID
+        sync: false
+      - key: AZURE_VIDEO_INDEXER_LOCATION
+        sync: false
+      - key: AZURE_VIDEO_INDEXER_ACCESS_TOKEN
+        sync: false
+      - key: AZURE_VIDEO_INDEXER_SUBSCRIPTION_KEY
+        sync: false
+      - key: AZURE_VIDEO_INDEXER_LANGUAGE
+        value: AutoDetect
+      - key: AZURE_VIDEO_INDEXER_POLL_MS
+        value: "7000"
+      - key: AZURE_VIDEO_INDEXER_MAX_POLLS
+        value: "22"
+      - key: AZURE_VIDEO_INDEXER_TIMEOUT_MS
+        value: "30000"

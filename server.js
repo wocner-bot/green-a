@@ -9,6 +9,24 @@ const root = __dirname;
 const port = Number(process.env.PORT || 8787);
 const host = process.env.HOST || "0.0.0.0";
 const youtubeApiKey = String(process.env.YOUTUBE_API_KEY || "").trim();
+const videoAnalysisProvider = String(process.env.VIDEO_ANALYSIS_PROVIDER || "local").trim().toLowerCase();
+
+function envInt(name, fallback) {
+  const value = Number(process.env[name]);
+  return Number.isFinite(value) && value > 0 ? Math.round(value) : fallback;
+}
+
+const azureVideoIndexerConfig = {
+  baseUrl: String(process.env.AZURE_VIDEO_INDEXER_BASE_URL || "https://api.videoindexer.ai").replace(/\/+$/, ""),
+  accountId: String(process.env.AZURE_VIDEO_INDEXER_ACCOUNT_ID || "").trim(),
+  location: String(process.env.AZURE_VIDEO_INDEXER_LOCATION || "").trim(),
+  accessToken: String(process.env.AZURE_VIDEO_INDEXER_ACCESS_TOKEN || "").trim(),
+  subscriptionKey: String(process.env.AZURE_VIDEO_INDEXER_SUBSCRIPTION_KEY || "").trim(),
+  language: String(process.env.AZURE_VIDEO_INDEXER_LANGUAGE || "AutoDetect").trim(),
+  pollIntervalMs: envInt("AZURE_VIDEO_INDEXER_POLL_MS", 7000),
+  maxPolls: envInt("AZURE_VIDEO_INDEXER_MAX_POLLS", 22),
+  timeoutMs: envInt("AZURE_VIDEO_INDEXER_TIMEOUT_MS", 30000)
+};
 
 const mime = {
   ".html": "text/html; charset=utf-8",
@@ -833,14 +851,14 @@ async function analyzeVideoStream(videoUrl, duration, headers = {}) {
 
 async function extractFrameOcr(videoUrl, segments, duration, headers = {}, pageUrl = "") {
   if (!videoUrl && !pageUrl) {
-    return { available: false, frames: [], text: "", warnings: ["Видеопоток для OCR недоступен."] };
+    return { available: false, frames: [], text: "", warnings: ["Видеопоток для OCR недоступен."], source: "local-tesseract" };
   }
   if (!(await hasCommand("ffmpeg"))) {
-    return { available: false, frames: [], text: "", warnings: ["ffmpeg не установлен, извлечение кадров для OCR недоступно."] };
+    return { available: false, frames: [], text: "", warnings: ["ffmpeg не установлен, извлечение кадров для OCR недоступно."], source: "local-tesseract" };
   }
   const hasTesseract = await hasCommand("tesseract");
   if (!hasTesseract) {
-    return { available: false, frames: [], text: "", warnings: ["tesseract не установлен, OCR текста на кадрах пропущен."] };
+    return { available: false, frames: [], text: "", warnings: ["tesseract не установлен, OCR текста на кадрах пропущен."], source: "local-tesseract" };
   }
   const ranges = (segments || [])
     .map((segment) => parseTimeRangeSeconds(segment.time))
@@ -897,23 +915,44 @@ async function extractFrameOcr(videoUrl, segments, duration, headers = {}, pageU
     available: frames.some((frame) => frame.hasText),
     frames,
     text,
-    warnings: frames.some((frame) => frame.warning) ? frames.map((frame) => frame.warning).filter(Boolean) : []
+    warnings: frames.some((frame) => frame.warning) ? frames.map((frame) => frame.warning).filter(Boolean) : [],
+    source: "local-tesseract"
   };
 }
 
-async function analyzeMediaStreams({ audioUrl, videoUrl, pageUrl, duration, cues, segments, mode, audioHeaders = {}, videoHeaders = {} }) {
+async function analyzeMediaStreams({ audioUrl, videoUrl, pageUrl, title, duration, cues, segments, mode, audioHeaders = {}, videoHeaders = {} }) {
   if (mode !== "stream") {
     return {
       audio: { available: false, score: cues.length ? estimatePace(cues) : 5, warnings: ["Медиа-анализ отключен в быстром режиме."] },
       video: { available: false, score: 5, readabilityScore: 5, warnings: ["Медиа-анализ отключен в быстром режиме."] },
-      ocr: { available: false, frames: [], text: "", warnings: ["OCR отключен в быстром режиме."] }
+      ocr: { available: false, frames: [], text: "", warnings: ["OCR отключен в быстром режиме."], source: "disabled-fast-mode" }
     };
   }
   const [audio, video] = await Promise.all([
     analyzeAudioStream(audioUrl, duration, cues, audioHeaders),
     analyzeVideoStream(videoUrl, duration, videoHeaders)
   ]);
-  const ocr = await extractFrameOcr(videoUrl, segments, duration, videoHeaders, pageUrl);
+  let ocr = await extractFrameOcr(videoUrl, segments, duration, videoHeaders, pageUrl);
+  if (canUseAzureVideoIndexer(mode)) {
+    try {
+      const azureOcr = await analyzeOcrViaAzureVideoIndexer({
+        pageUrl,
+        directVideoUrl: videoUrl,
+        title
+      });
+      const localWarnings = ocr.available ? [] : (ocr.warnings || []);
+      ocr = {
+        ...azureOcr,
+        warnings: [...localWarnings, ...(azureOcr.warnings || [])],
+        source: "azure-video-indexer"
+      };
+    } catch (error) {
+      ocr = {
+        ...ocr,
+        warnings: [`Azure Video Indexer OCR недоступен: ${error.message}`, ...(ocr.warnings || [])]
+      };
+    }
+  }
   return { audio, video, ocr };
 }
 
@@ -1142,28 +1181,182 @@ function buildVisualObservations({ segments, description, transcript, thumbnail,
   return [...observations, ...frameMetricObservations, ...ocrObservations].slice(0, 24);
 }
 
-async function fetchText(url) {
-  const response = await fetch(url, {
-    headers: {
-      "accept-language": "ru,en;q=0.8",
-      "user-agent": "Mozilla/5.0 GreenA/1.0"
+const defaultFetchHeaders = {
+  "accept-language": "ru,en;q=0.8",
+  "user-agent": "Mozilla/5.0 GreenA/1.0"
+};
+
+async function fetchText(url, options = {}) {
+  const timeoutMs = Number(options.timeoutMs || 25000);
+  const headers = { ...defaultFetchHeaders, ...(options.headers || {}) };
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, {
+      ...options,
+      headers,
+      signal: controller.signal
+    });
+    if (!response.ok) {
+      const body = await response.text().catch(() => "");
+      throw new Error(`HTTP ${response.status}${body ? `: ${body.slice(0, 220)}` : ""}`);
     }
-  });
-  if (!response.ok) throw new Error(`HTTP ${response.status}`);
-  return response.text();
+    return response.text();
+  } catch (error) {
+    if (error?.name === "AbortError") throw new Error(`Таймаут запроса ${timeoutMs}ms`);
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
-async function fetchJson(url) {
-  const response = await fetch(url, {
-    headers: {
-      "accept-language": "ru,en;q=0.8",
-      "user-agent": "Mozilla/5.0 GreenA/1.0"
-    }
-  });
-  if (!response.ok) throw new Error(`HTTP ${response.status}`);
-  const text = await response.text();
+async function fetchJson(url, options = {}) {
+  const text = await fetchText(url, options);
   if (!text.trim()) throw new Error("Пустой JSON-ответ");
   return JSON.parse(text);
+}
+
+function parseAzureTokenPayload(payload = "") {
+  const raw = String(payload || "").trim();
+  if (!raw) return "";
+  try {
+    const parsed = JSON.parse(raw);
+    if (typeof parsed === "string") return parsed.trim();
+    if (typeof parsed?.accessToken === "string") return parsed.accessToken.trim();
+    if (typeof parsed?.token === "string") return parsed.token.trim();
+  } catch {
+    // Keep as plain text.
+  }
+  return raw.replace(/^"+|"+$/g, "").trim();
+}
+
+function parseVideoIndexerTime(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return null;
+  if (/^\d+(?:\.\d+)?$/.test(raw)) return Number(raw);
+  const match = raw.match(/^(\d+):(\d{2})(?::(\d{2}(?:\.\d+)?))?$/);
+  if (match) {
+    if (match[3] == null) return (Number(match[1]) * 60) + Number(match[2]);
+    return (Number(match[1]) * 3600) + (Number(match[2]) * 60) + Number(match[3]);
+  }
+  const iso = raw.match(/^PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+(?:\.\d+)?)S)?$/i);
+  if (iso) {
+    return (Number(iso[1] || 0) * 3600) + (Number(iso[2] || 0) * 60) + Number(iso[3] || 0);
+  }
+  return null;
+}
+
+function canUseAzureVideoIndexer(mode) {
+  if (mode !== "stream") return false;
+  if (videoAnalysisProvider !== "azure") return false;
+  return Boolean(
+    azureVideoIndexerConfig.accountId &&
+    azureVideoIndexerConfig.location &&
+    (azureVideoIndexerConfig.accessToken || azureVideoIndexerConfig.subscriptionKey)
+  );
+}
+
+async function getAzureVideoIndexerAccessToken() {
+  if (azureVideoIndexerConfig.accessToken) return azureVideoIndexerConfig.accessToken;
+  if (!azureVideoIndexerConfig.subscriptionKey) throw new Error("Не задан AZURE_VIDEO_INDEXER_SUBSCRIPTION_KEY.");
+  const url = `${azureVideoIndexerConfig.baseUrl}/Auth/${encodeURIComponent(azureVideoIndexerConfig.location)}/Accounts/${encodeURIComponent(azureVideoIndexerConfig.accountId)}/AccessToken?allowEdit=true`;
+  const payload = await fetchText(url, {
+    timeoutMs: azureVideoIndexerConfig.timeoutMs,
+    headers: { "Ocp-Apim-Subscription-Key": azureVideoIndexerConfig.subscriptionKey }
+  });
+  const token = parseAzureTokenPayload(payload);
+  if (!token) throw new Error("Azure Video Indexer вернул пустой access token.");
+  return token;
+}
+
+function extractAzureVideoId(payload = {}) {
+  return payload?.id || payload?.videoId || payload?.Id || payload?.video?.id || "";
+}
+
+async function uploadVideoToAzureVideoIndexer(accessToken, videoUrl, videoName) {
+  const url = new URL(`${azureVideoIndexerConfig.baseUrl}/${encodeURIComponent(azureVideoIndexerConfig.location)}/Accounts/${encodeURIComponent(azureVideoIndexerConfig.accountId)}/Videos`);
+  url.searchParams.set("accessToken", accessToken);
+  url.searchParams.set("name", (videoName || "YouTube video").slice(0, 80));
+  url.searchParams.set("privacy", "Private");
+  url.searchParams.set("indexingPreset", "Default");
+  url.searchParams.set("streamingPreset", "NoStreaming");
+  url.searchParams.set("language", azureVideoIndexerConfig.language || "AutoDetect");
+  url.searchParams.set("videoUrl", videoUrl);
+  const payload = await fetchJson(url.toString(), {
+    method: "POST",
+    timeoutMs: azureVideoIndexerConfig.timeoutMs,
+    headers: { Authorization: `Bearer ${accessToken}` }
+  });
+  const id = extractAzureVideoId(payload);
+  if (!id) throw new Error("Azure Video Indexer не вернул id видео после загрузки.");
+  return id;
+}
+
+async function fetchAzureVideoIndexerIndex(accessToken, videoId) {
+  const url = new URL(`${azureVideoIndexerConfig.baseUrl}/${encodeURIComponent(azureVideoIndexerConfig.location)}/Accounts/${encodeURIComponent(azureVideoIndexerConfig.accountId)}/Videos/${encodeURIComponent(videoId)}/Index`);
+  url.searchParams.set("accessToken", accessToken);
+  url.searchParams.set("includeSummarizedInsights", "true");
+  return fetchJson(url.toString(), {
+    timeoutMs: azureVideoIndexerConfig.timeoutMs,
+    headers: { Authorization: `Bearer ${accessToken}` }
+  });
+}
+
+function extractAzureOcrResult(indexData = {}) {
+  const insights = indexData?.videos?.[0]?.insights || indexData?.videos?.insights || indexData?.insights || {};
+  const ocrItems = Array.isArray(insights?.ocr) ? insights.ocr : [];
+  const frames = ocrItems
+    .map((item) => {
+      const text = cleanSegmentText(
+        item?.text ||
+        item?.content ||
+        (Array.isArray(item?.lines) ? item.lines.map((line) => line?.text || "").join(" ") : "")
+      ).slice(0, 700);
+      const startRaw = item?.instances?.[0]?.start || item?.instances?.[0]?.adjustedStart || item?.start || "";
+      const startSeconds = parseVideoIndexerTime(startRaw);
+      const time = Number.isFinite(startSeconds)
+        ? secondsToTime(startSeconds)
+        : "";
+      return {
+        time,
+        text,
+        hasText: text.length > 8,
+        source: "azure-video-indexer"
+      };
+    })
+    .filter((frame) => frame.text);
+  const text = frames.map((frame) => frame.text).join("\n");
+  return {
+    available: frames.some((frame) => frame.hasText),
+    frames: frames.slice(0, 12),
+    text,
+    warnings: frames.length ? [] : ["Azure Video Indexer не вернул OCR-текст по ролику."]
+  };
+}
+
+async function analyzeOcrViaAzureVideoIndexer({ pageUrl, directVideoUrl, title }) {
+  const sourceUrl = directVideoUrl || pageUrl;
+  if (!sourceUrl) return { available: false, frames: [], text: "", warnings: ["Нет URL для Azure Video Indexer."] };
+  const accessToken = await getAzureVideoIndexerAccessToken();
+  const videoId = await uploadVideoToAzureVideoIndexer(accessToken, sourceUrl, title);
+  let last = null;
+  for (let poll = 0; poll < azureVideoIndexerConfig.maxPolls; poll += 1) {
+    const indexData = await fetchAzureVideoIndexerIndex(accessToken, videoId);
+    last = indexData;
+    const state = String(indexData?.state || indexData?.videos?.[0]?.state || "").toLowerCase();
+    if (/processed|indexed/.test(state)) {
+      return {
+        ...extractAzureOcrResult(indexData),
+        warnings: []
+      };
+    }
+    if (/failed|error/.test(state)) {
+      throw new Error(`Azure Video Indexer завершил анализ со статусом "${state || "failed"}".`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, azureVideoIndexerConfig.pollIntervalMs));
+  }
+  const state = String(last?.state || last?.videos?.[0]?.state || "").toLowerCase() || "timeout";
+  throw new Error(`Azure Video Indexer не завершил обработку вовремя (последний статус: ${state}).`);
 }
 
 async function getOEmbed(videoUrl) {
@@ -1555,7 +1748,7 @@ async function analyzeYouTube(inputUrl, mode = "stream") {
   const audioHeaders = streamResolver.audioHeaders || {};
   const videoHeaders = streamResolver.videoHeaders || {};
   const [{ transcript, cues, track }, thumbnail] = await Promise.all([
-    fetchBestCaptions(tracks),
+    fetchBestCaptions(tracks, videoUrl),
     mode === "stream" ? probeThumbnail(videoId) : Promise.resolve(null)
   ]);
   const chapters = parseDescriptionChapters(description, videoDuration);
@@ -1579,6 +1772,7 @@ async function analyzeYouTube(inputUrl, mode = "stream") {
     audioUrl,
     videoUrl: streamUrl,
     pageUrl: videoUrl,
+    title,
     duration: videoDuration,
     cues,
     segments,
@@ -1586,6 +1780,7 @@ async function analyzeYouTube(inputUrl, mode = "stream") {
     audioHeaders,
     videoHeaders
   });
+  const ocrProvider = mediaAnalysis.ocr?.source === "azure-video-indexer" ? "azure-video-indexer" : "local";
   const visualObservations = buildVisualObservations({ segments, description, transcript, thumbnail, mediaAnalysis });
   const signals = [
     "название и описание страницы YouTube",
@@ -1597,7 +1792,11 @@ async function analyzeYouTube(inputUrl, mode = "stream") {
     streamResolver.available ? `медиапотоки получены через ${streamResolver.source}` : "",
     mediaAnalysis.audio?.available ? "аудио-метрики рассчитаны через ffmpeg" : "",
     mediaAnalysis.video?.available ? "визуальные метрики кадров рассчитаны через ffmpeg" : "",
-    mediaAnalysis.ocr?.available ? "OCR текста на кадрах выполнен через tesseract" : "",
+    mediaAnalysis.ocr?.available
+      ? (ocrProvider === "azure-video-indexer"
+        ? "OCR текста на кадрах выполнен через Azure AI Video Indexer"
+        : "OCR текста на кадрах выполнен через tesseract")
+      : "",
     visualObservations.length ? "визуальные наблюдения добавлены в пакет рейтингования" : "",
     !transcript && visualObservations.length ? "включен fallback: оценка может опираться на экран и визуальные действия" : "",
     mode === "stream" && thumbnail ? "thumbnail проверен без сохранения файла" : "",
@@ -1624,7 +1823,9 @@ async function analyzeYouTube(inputUrl, mode = "stream") {
   const ocrWarningText = (mediaAnalysis.ocr?.warnings || []).join(" ");
   const limitations = [
     mediaAnalysis.ocr?.available
-      ? "OCR кадров выполнен локальным движком и может ошибаться на мелком, размытом или декоративном тексте"
+      ? (ocrProvider === "azure-video-indexer"
+        ? "OCR кадров выполнен через Azure AI Video Indexer; точность зависит от качества видео и статуса облачной обработки"
+        : "OCR кадров выполнен локальным движком и может ошибаться на мелком, размытом или декоративном тексте")
       : mode !== "stream"
         ? "OCR кадров отключен в быстром режиме"
         : /tesseract не установлен/i.test(ocrWarningText)
@@ -1682,6 +1883,8 @@ async function analyzeYouTube(inputUrl, mode = "stream") {
       audioAnalyzed: Boolean(mediaAnalysis.audio?.available),
       videoAnalyzed: Boolean(mediaAnalysis.video?.available),
       ocrAnalyzed: Boolean(mediaAnalysis.ocr?.available),
+      ocrProvider,
+      configuredAnalysisProvider: videoAnalysisProvider,
       transcriptAvailable: Boolean(transcript),
       signals,
       limitations,

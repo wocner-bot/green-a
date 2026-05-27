@@ -130,8 +130,6 @@ const els = {
   ocrView: document.querySelector("#ocrView"),
   score: document.querySelector("#score"),
   grade: document.querySelector("#grade"),
-  headerScore: document.querySelector("#headerScore"),
-  headerGrade: document.querySelector("#headerGrade"),
   ratingSummary: document.querySelector("#ratingSummary"),
   radar: document.querySelector("#radar")
 };
@@ -1859,9 +1857,7 @@ function zeroScores() {
 function renderEmptyAnalysis() {
   const scores = zeroScores();
   els.score.textContent = "0";
-  els.headerScore.textContent = "0";
   els.grade.textContent = "-";
-  els.headerGrade.textContent = "-";
   els.ratingSummary.textContent = "Загрузите YouTube URL, чтобы рассчитать рейтинг.";
   renderScales(scores);
   els.audienceList.innerHTML = `
@@ -1888,9 +1884,7 @@ function update() {
   const total = isExcluded ? null : weightedTotal(scores);
   const grade = isExcluded ? "N/A" : gradeFor(total);
   els.score.textContent = total ?? NOT_AVAILABLE_LABEL;
-  els.headerScore.textContent = total ?? "N/A";
   els.grade.textContent = grade;
-  els.headerGrade.textContent = grade;
   els.ratingSummary.textContent = !isExcluded
     ? [summaryFor(total), flags.educationalFit.weak ? `Обучающий формат выражен слабо: ${flags.educationalFit.score}/10.` : "", ratingCapNote(scores)].filter(Boolean).join(" ")
     : `Ролик исключен из образовательного рейтинга и помечен как ${NOT_AVAILABLE_LABEL}: по описанию и содержанию это скорее познавательный/медийный материал без достаточной учебной механики.`;

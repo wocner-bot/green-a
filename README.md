@@ -103,7 +103,18 @@ PORT=8787
 HOST=0.0.0.0
 ```
 
-Do not commit `.env` files with real secrets. The current app does not require a YouTube API key; it uses public YouTube page data and fallback extraction.
+Optional:
+
+```text
+YOUTUBE_API_KEY=...
+VIDEO_ANALYSIS_PROVIDER=local|azure
+AZURE_VIDEO_INDEXER_ACCOUNT_ID=...
+AZURE_VIDEO_INDEXER_LOCATION=...
+AZURE_VIDEO_INDEXER_ACCESS_TOKEN=...
+AZURE_VIDEO_INDEXER_SUBSCRIPTION_KEY=...
+```
+
+Do not commit `.env` files with real secrets. The app can work without YouTube API key and without Azure settings, using public YouTube data and local fallback analysis.
 
 ## Media Analysis
 
@@ -112,6 +123,7 @@ The backend can run deeper media analysis when the host has the required command
 - `ffmpeg` for audio loudness, silence, frame brightness/contrast and scene-based segmentation;
 - `yt-dlp` for resolving real YouTube audio/video stream URLs when the public page HTML does not expose direct streams;
 - `tesseract` with English/Russian language packs for OCR on sampled video frames.
+- Optional: Azure AI Video Indexer as OCR provider (`VIDEO_ANALYSIS_PROVIDER=azure`) with automatic fallback to local OCR if Azure is unavailable.
 
 On Render, `packages.txt` asks the platform to install:
 
