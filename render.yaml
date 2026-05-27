@@ -11,3 +11,7 @@ services:
         value: production
       - key: HOST
         value: 0.0.0.0
+      - key: PORT
+        value: 3000
+      - key: YOUTUBE_API_KEY
+        fromEnv: YOUTUBE_API_KEY
