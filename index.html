@@ -71,7 +71,7 @@
 
           <label class="field">
             <span>Описание ролика и OCR со слайдов</span>
-            <textarea id="ocrText" rows="5" placeholder="Автоматически подтягивается описание YouTube. OCR кадров можно добавить позже, когда подключим анализ видеоряда."></textarea>
+            <textarea id="ocrText" rows="5" placeholder="Автоматически подтягиваются описание YouTube, главы, медиа-анализ и OCR текста на кадрах при наличии tesseract."></textarea>
           </label>
         </div>
 
@@ -194,6 +194,29 @@
           </div>
           <div class="evidence-list" id="evidenceList"></div>
         </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow">Мультимедиа</p>
+              <h2>Расшифровка и визуальное содержание</h2>
+            </div>
+          </div>
+          <div class="detail-grid">
+            <article class="detail-block">
+              <strong>Расшифровка речи</strong>
+              <pre id="transcriptView" class="detail-text">Транскрипт будет отображаться здесь после анализа.</pre>
+            </article>
+            <article class="detail-block">
+              <strong>Что происходит на картинке</strong>
+              <pre id="visualView" class="detail-text">Визуальные наблюдения будут отображаться здесь при наличии анализа экрана.</pre>
+            </article>
+            <article class="detail-block">
+              <strong>Текст на слайдах / OCR</strong>
+              <pre id="ocrView" class="detail-text">Текст OCR будет появляться здесь, когда он доступен.</pre>
+            </article>
+          </div>
+        </section>
       </aside>
     </main>
 
@@ -229,6 +252,7 @@
           </div>
           <div class="actions">
             <button class="ghost-button" id="loadDashboardDemo" type="button">Демо-набор</button>
+            <button class="ghost-button" id="exportRatingData" type="button">Скачать Excel</button>
             <button class="primary-button" id="saveVideo" type="button">Сохранить ролик</button>
           </div>
         </div>
@@ -253,7 +277,7 @@
           </div>
         </div>
         <div class="class-guide">
-          <article><strong>A</strong><span>85-100</span><p>Сильное обучающее видео: глубина, практика, структура и доказательность.</p></article>
+          <article><strong>A</strong><span>85-100</span><p>Сильное обучающее видео: глубина, педагогика, структура и доказательность.</p></article>
           <article><strong>B</strong><span>70-84</span><p>Хороший материал с понятными зонами усиления.</p></article>
           <article><strong>C</strong><span>55-69</span><p>Средний ролик: полезен, но методически неровный.</p></article>
           <article><strong>D</strong><span>40-54</span><p>Слабое обучение: есть фрагменты пользы, но много рисков.</p></article>

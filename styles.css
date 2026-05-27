@@ -154,6 +154,27 @@ select {
   padding: 20px;
 }
 
+.detail-grid {
+  display: grid;
+  gap: 16px;
+}
+
+.detail-block {
+  display: grid;
+  gap: 10px;
+}
+
+.detail-text {
+  margin: 0;
+  padding: 14px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.05);
+  white-space: pre-wrap;
+  word-break: break-word;
+  min-height: 120px;
+  color: var(--muted);
+}
+
 .panel-head {
   display: flex;
   align-items: start;

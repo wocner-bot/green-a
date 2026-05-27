@@ -105,11 +105,34 @@ HOST=0.0.0.0
 
 Do not commit `.env` files with real secrets. The current app does not require a YouTube API key; it uses public YouTube page data and fallback extraction.
 
+## Media Analysis
+
+The backend can run deeper media analysis when the host has the required command-line tools:
+
+- `ffmpeg` for audio loudness, silence, frame brightness/contrast and scene-based segmentation;
+- `yt-dlp` for resolving real YouTube audio/video stream URLs when the public page HTML does not expose direct streams;
+- `tesseract` with English/Russian language packs for OCR on sampled video frames.
+
+On Render, `packages.txt` asks the platform to install:
+
+```text
+ffmpeg
+yt-dlp
+tesseract-ocr
+tesseract-ocr-eng
+tesseract-ocr-rus
+```
+
+If these tools are missing, the app still works, but the response marks audio/video/OCR analysis as unavailable and falls back to YouTube metadata, captions, chapters and thumbnail signals.
+
 ## What It Does
 
 - analyzes YouTube URLs;
 - extracts title, description, available captions and chapters;
 - segments videos into 30-90 second fragments;
+- analyzes audio loudness, pauses and available speech timing through `ffmpeg`;
+- analyzes sampled video frames for brightness/contrast and optional OCR through `ffmpeg` + `tesseract`;
+- adds visual observations from screen, scene and OCR signals and uses them as a fallback when captions or speech are missing;
 - scores depth, pedagogy, structure, practice, reliability, complexity, technical quality and communication;
 - filters out clearly non-educational videos;
 - ranks saved videos and groups them by topic;
@@ -125,4 +148,5 @@ styles.css   Dashboard styling
 app.js       Client-side scoring and rendering
 server.js    Node server, YouTube extraction and benchmark API
 render.yaml  Render deployment blueprint
+packages.txt Optional system packages for media analysis on Render
 ```

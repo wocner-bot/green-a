@@ -1,12 +1,12 @@
 const scales = [
-  { id: "depth", label: "Содержательная глубина", weight: 30 },
-  { id: "pedagogy", label: "Педагогическое качество", weight: 18 },
-  { id: "structure", label: "Структурированность", weight: 14 },
-  { id: "practice", label: "Практическая применимость", weight: 13 },
-  { id: "reliability", label: "Достоверность", weight: 12 },
-  { id: "complexity", label: "Когнитивная сложность", weight: 7 },
-  { id: "technical", label: "Техническое качество", weight: 4 },
-  { id: "communication", label: "Коммуникация", weight: 2 }
+  { id: "depth", label: "Содержательная глубина", weight: 24 },
+  { id: "pedagogy", label: "Педагогическое качество", weight: 22 },
+  { id: "structure", label: "Структурированность", weight: 18 },
+  { id: "reliability", label: "Достоверность", weight: 16 },
+  { id: "practice", label: "Практическая применимость", weight: 11 },
+  { id: "complexity", label: "Когнитивная сложность", weight: 5 },
+  { id: "technical", label: "Техническое качество", weight: 3 },
+  { id: "communication", label: "Коммуникация", weight: 1 }
 ];
 
 const demo = {
@@ -86,8 +86,12 @@ const state = {
   popularStatus: "idle",
   popularTopic: "",
   hasLoadedVideo: false,
-  segments: []
+  segments: [],
+  visualObservations: [],
+  mediaAnalysis: null
 };
+
+const NOT_AVAILABLE_LABEL = "Not Available";
 
 const els = {
   videoUrl: document.querySelector("#videoUrl"),
@@ -113,6 +117,7 @@ const els = {
   topicGroups: document.querySelector("#topicGroups"),
   comparisonGrid: document.querySelector("#comparisonGrid"),
   saveVideo: document.querySelector("#saveVideo"),
+  exportRatingData: document.querySelector("#exportRatingData"),
   loadDashboardDemo: document.querySelector("#loadDashboardDemo"),
   scaleList: document.querySelector("#scaleList"),
   audienceList: document.querySelector("#audienceList"),
@@ -120,6 +125,9 @@ const els = {
   popularBenchmark: document.querySelector("#popularBenchmark"),
   riskList: document.querySelector("#riskList"),
   evidenceList: document.querySelector("#evidenceList"),
+  transcriptView: document.querySelector("#transcriptView"),
+  visualView: document.querySelector("#visualView"),
+  ocrView: document.querySelector("#ocrView"),
   score: document.querySelector("#score"),
   grade: document.querySelector("#grade"),
   headerScore: document.querySelector("#headerScore"),
@@ -135,6 +143,11 @@ function clamp(value, min = 0, max = 10) {
 function countHits(text, words) {
   const haystack = text.toLowerCase();
   return words.reduce((sum, word) => sum + (haystack.includes(word) ? 1 : 0), 0);
+}
+
+function regexHits(text, patterns) {
+  const haystack = String(text || "").toLowerCase();
+  return patterns.reduce((sum, pattern) => sum + (pattern.test(haystack) ? 1 : 0), 0);
 }
 
 function uniqueTypes(segments = state.segments) {
@@ -160,50 +173,227 @@ function getInputs() {
   };
 }
 
-function inferTopic(video) {
-  const text = `${video.title || ""} ${video.topicSeed || ""} ${video.transcript || ""} ${video.ocr || ""}`.toLowerCase();
-  if (/физик|physics|механик|электродинамик|квант|термодинамик|егэ.*физ/.test(text)) return "Физика";
-  if (/математ|math|алгебр|геометр|calculus|егэ.*мат/.test(text)) return "Математика";
-  if (/английск|english|ielts|toefl|grammar|vocabulary|немецк|deutsch|испанск|французск|японск|китайск/.test(text)) return "Иностранные языки";
-  if (/трейдинг|trading|бирж|крипт|инвест|акци[ия]|forex|форекс/.test(text)) return "Трейдинг и инвестиции";
-  if (/python|javascript|typescript|react|node|программ|кодинг|разработк/.test(text)) return "Программирование";
-  if (/sql|postgres|join|таблиц|баз[аы] данных/.test(text)) return "Базы данных";
-  if (/ux|ui|дизайн|интерфейс|исследован|продукт/.test(text)) return "UX и продуктовый дизайн";
-  if (/ai|ии|нейро|machine learning|машинн|модель|нейросет/.test(text)) return "AI и машинное обучение";
-  if (/продаж|маркет|скидк|оффер|подпис/.test(text)) return "Маркетинг и продажи";
-  if (/обуч|педагог|методолог|урок|курс|когнитив/.test(text)) return "Методология обучения";
-  return "Без темы";
+const genericTopicLabels = new Set([
+  "",
+  "без темы",
+  "обучение",
+  "образование",
+  "методология обучения",
+  "учебное видео",
+  "обучающий ролик"
+]);
+
+const topicRules = [
+  {
+    id: "physics",
+    label: "Физика",
+    benchmark: "обучение физике",
+    include: [
+      [/физик|physics|механик|электродинамик|термодинамик|оптик|квант|ньютон|электричеств|магнетизм|кинематик|динамик/i, "физика"],
+      [/егэ\s*(по\s*)?физ|огэ\s*(по\s*)?физ|задач[аи]\s+по\s+физ/i, "экзамен/задачи по физике"]
+    ],
+    exclude: [/англий|english|ielts|toefl|язык программирован|python|javascript|typescript|нейросет|machine learning|трейдинг|trading|ux|figma/i]
+  },
+  {
+    id: "math",
+    label: "Математика",
+    benchmark: "обучение математике",
+    include: [
+      [/математ|math|алгебр|геометр|calculus|тригонометр|производн|интеграл|логарифм|уравнен|теорем|дроб[ьи]/i, "математика"],
+      [/егэ\s*(по\s*)?мат|огэ\s*(по\s*)?мат|задач[аи]\s+по\s+мат/i, "экзамен/задачи по математике"]
+    ],
+    exclude: [/англий|english|ielts|toefl|python|javascript|typescript|нейросет|machine learning|трейдинг|trading|ux|figma/i]
+  },
+  {
+    id: "language",
+    label: "Иностранные языки",
+    benchmark: "обучение иностранному языку",
+    include: [
+      [/английск|english|ielts|toefl|grammar|vocabulary|speaking|listening|pronunciation|лексик[аи]|грамматик/i, "английский/языковое обучение"],
+      [/немецк|deutsch|испанск|spanish|французск|french|японск|китайск|иностранн[а-я\s]+язык/i, "иностранный язык"]
+    ],
+    exclude: [/язык программирован|programming language|python|javascript|typescript|react|node|sql|кодинг|код\b|программ|разработк|нейро|нейросет|machine learning|трейдинг|trading|бирж|крипт|физик|математ/i]
+  },
+  {
+    id: "trading",
+    label: "Трейдинг и инвестиции",
+    benchmark: "обучение трейдингу",
+    include: [
+      [/трейдинг|trading|бирж|крипт|криптовалют|инвест|акци[ия]|forex|форекс|фьючерс|скальпинг|теханализ|техническ[а-я\s]+анализ/i, "трейдинг/инвестиции"]
+    ],
+    exclude: [/англий|english|язык программирован|python|javascript|нейросет|machine learning|физик|математ|ux|figma/i]
+  },
+  {
+    id: "database",
+    label: "Базы данных",
+    benchmark: "обучение SQL",
+    include: [
+      [/\bsql\b|postgres|mysql|sqlite|баз[аы]\s+данных|database|join|индекс[ыа]?|таблиц[аы]\s+sql/i, "SQL/базы данных"]
+    ],
+    exclude: [/англий|english|иностранн[а-я\s]+язык|трейдинг|нейросет|физик|математ|ux|figma/i]
+  },
+  {
+    id: "programming",
+    label: "Программирование",
+    benchmark: "обучение программированию",
+    include: [
+      [/\bpython\b|\bjavascript\b|\btypescript\b|\breact\b|\bnode\.?js\b|\bhtml\b|\bcss\b|frontend|backend|программирован|кодинг|разработк|алгоритм[ыа]?\s+код|\bide\b|\bgit\b/i, "программирование"],
+      [/язык программирован|programming language/i, "язык программирования"]
+    ],
+    exclude: [/английск|english|ielts|toefl|grammar|vocabulary|немецк|deutsch|испанск|французск|иностранн[а-я\s]+язык|трейдинг|физик|математ|ux|figma/i]
+  },
+  {
+    id: "ux",
+    label: "UX и продуктовый дизайн",
+    benchmark: "обучение UX дизайну",
+    include: [
+      [/\bux\b|\bui\b|figma|дизайн интерфейс|продуктов[а-я\s]+дизайн|user research|исследован[а-я\s]+пользовател|прототип|юзабилити/i, "UX/UI дизайн"]
+    ],
+    exclude: [/англий|english|sql|python|javascript|нейросет|machine learning|трейдинг|физик|математ/i]
+  },
+  {
+    id: "ai",
+    label: "AI и машинное обучение",
+    benchmark: "обучение нейросетям",
+    include: [
+      [/\bai\b|\bml\b|machine learning|deep learning|llm|chatgpt|нейро|нейросет|искусственн[а-я\s]+интеллект|машинн[а-я\s]+обучен|больш[а-я\s]+языков[а-я\s]+модел/i, "AI/машинное обучение"]
+    ],
+    exclude: [/английск|english|ielts|toefl|иностранн[а-я\s]+язык|трейдинг|trading|ux|figma|физик|математ/i]
+  },
+  {
+    id: "marketing",
+    label: "Маркетинг и продажи",
+    benchmark: "обучение маркетингу",
+    include: [
+      [/маркетинг|продаж[аи]|воронк[аи]|таргет|smm|реклам[аи]|лидогенерац|оффер|копирайтинг/i, "маркетинг/продажи"]
+    ],
+    exclude: [/физик|математ|англий|english|python|javascript|нейросет|ux|figma|трейдинг/i]
+  },
+  {
+    id: "learning-methodology",
+    label: "Методология обучения",
+    benchmark: "методология обучения",
+    include: [
+      [/методолог[а-я\s]+обучен|педагогик|дидактик|instructional design|learning design|когнитивн[а-я\s]+нагрузк|образовательн[а-я\s]+дизайн|green argus/i, "методология обучения"]
+    ],
+    exclude: [/математ|физик|англий|english|python|javascript|sql|трейдинг|ux|figma|нейросет/i]
+  }
+];
+
+function normalizeTopicText(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/ё/g, "е")
+    .replace(/[^\p{L}\p{N}\s.+#-]/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
-function benchmarkTopicFromText(text) {
-  const value = String(text || "").toLowerCase();
-  if (/физик|physics|механик|электродинамик|квант|термодинамик|егэ.*физ/.test(value)) return "обучение физике";
-  if (/математ|math|алгебр|геометр|calculus|егэ.*мат/.test(value)) return "обучение математике";
-  if (/английск|english|ielts|toefl|grammar|vocabulary/.test(value)) return "обучение английскому языку";
-  if (/немецк|deutsch/.test(value)) return "обучение немецкому языку";
-  if (/испанск/.test(value)) return "обучение испанскому языку";
-  if (/французск/.test(value)) return "обучение французскому языку";
-  if (/японск/.test(value)) return "обучение японскому языку";
-  if (/китайск/.test(value)) return "обучение китайскому языку";
-  if (/иностранн.*язык|языков/.test(value) && !/программ|код|python|javascript|typescript|react|node/.test(value)) return "обучение иностранному языку";
-  if (/трейдинг|trading|бирж|крипт|инвест|акци[ия]|forex|форекс/.test(value)) return "обучение трейдингу";
-  if (/python/.test(value)) return "обучение Python";
-  if (/javascript|typescript|react|node|программ|кодинг|разработк/.test(value)) return "обучение программированию";
-  if (/sql|postgres|join|таблиц|баз[аы] данных/.test(value)) return "обучение SQL";
-  if (/ux|ui|дизайн|интерфейс|исследован|продукт/.test(value)) return "обучение UX дизайну";
-  if (/ai|ии|нейро|machine learning|машинн|модель|нейросет/.test(value)) return "обучение нейросетям";
+function topicSourceText(video, key) {
+  if (!video) return "";
+  if (key === "title") return video.title || "";
+  if (key === "manualTopic") return video.topic || "";
+  if (key === "description") return `${video.description || ""} ${video.topicSeed || ""}`;
+  if (key === "transcript") return video.transcript || "";
+  if (key === "ocr") return `${video.ocr || ""} ${mediaAnalysisLines(video.mediaAnalysis).join(" ")}`;
   return "";
 }
 
+function specificBenchmark(rule, sources) {
+  const text = sources.map((source) => source.text).join(" ");
+  if (rule.id === "language") {
+    if (/английск|english|ielts|toefl|grammar|vocabulary|speaking|listening|pronunciation/i.test(text)) return "обучение английскому языку";
+    if (/немецк|deutsch/i.test(text)) return "обучение немецкому языку";
+    if (/испанск|spanish/i.test(text)) return "обучение испанскому языку";
+    if (/французск|french/i.test(text)) return "обучение французскому языку";
+    if (/японск/i.test(text)) return "обучение японскому языку";
+    if (/китайск/i.test(text)) return "обучение китайскому языку";
+  }
+  if (rule.id === "programming") {
+    if (/python/i.test(text)) return "обучение Python";
+    if (/javascript|typescript|react|node\.?js/i.test(text)) return "обучение JavaScript";
+  }
+  return rule.benchmark;
+}
+
+function classifyTopic(video = {}) {
+  if (video.topicClassification?.id) return video.topicClassification;
+  const manualTopic = normalizeTopicText(video.topic);
+  const manualTopicIsSpecific = manualTopic && !genericTopicLabels.has(manualTopic);
+  const sources = [
+    { key: "title", label: "название", weight: 5, text: topicSourceText(video, "title") },
+    { key: "manualTopic", label: "поле темы", weight: manualTopicIsSpecific ? 5 : 0, text: topicSourceText(video, "manualTopic") },
+    { key: "description", label: "описание/главы", weight: 2.6, text: topicSourceText(video, "description") },
+    { key: "ocr", label: "OCR/экран", weight: 2.2, text: topicSourceText(video, "ocr") },
+    { key: "transcript", label: "субтитры", weight: 1.4, text: topicSourceText(video, "transcript") }
+  ].map((source) => ({ ...source, text: normalizeTopicText(source.text) }));
+
+  const scored = topicRules.map((rule) => {
+    let score = 0;
+    const evidence = [];
+    for (const source of sources) {
+      if (!source.weight || !source.text) continue;
+      if (rule.exclude.some((pattern) => pattern.test(source.text))) score -= source.weight * 1.25;
+      for (const [pattern, label] of rule.include) {
+        if (pattern.test(source.text)) {
+          score += source.weight;
+          evidence.push(`${source.label}: ${label}`);
+          break;
+        }
+      }
+    }
+    return { ...rule, score, evidence: [...new Set(evidence)] };
+  }).sort((a, b) => b.score - a.score);
+
+  const best = scored[0] || { score: 0, evidence: [] };
+  const second = scored[1] || { score: 0 };
+  const margin = best.score - Math.max(0, second.score);
+  if (best.score < 4.5 || (best.score < 7 && margin < 1.6)) {
+    return {
+      id: "unknown",
+      label: "Без темы",
+      benchmark: "",
+      score: Number(Math.max(0, best.score).toFixed(1)),
+      confidence: "низкая",
+      evidence: best.evidence.slice(0, 4),
+      alternatives: scored.slice(0, 3).map((item) => ({ id: item.id, label: item.label, score: Number(item.score.toFixed(1)) }))
+    };
+  }
+
+  const confidence = best.score >= 9 && margin >= 3 ? "высокая" : "средняя";
+  return {
+    id: best.id,
+    label: best.label,
+    benchmark: specificBenchmark(best, sources),
+    score: Number(best.score.toFixed(1)),
+    confidence,
+    evidence: best.evidence.slice(0, 6),
+    alternatives: scored.slice(1, 4).map((item) => ({ id: item.id, label: item.label, score: Number(item.score.toFixed(1)) }))
+  };
+}
+
+function inferTopic(video) {
+  return classifyTopic(video).label;
+}
+
+function benchmarkTopicFromText(text) {
+  return classifyTopic({ title: text }).benchmark || "";
+}
+
 function benchmarkTopic(video) {
-  const topicMatch = benchmarkTopicFromText(video.topic || "");
-  if (topicMatch) return topicMatch;
-  const titleMatch = benchmarkTopicFromText(`${video.title || ""} ${video.topicSeed || ""}`);
-  if (titleMatch) return titleMatch;
-  const contentMatch = benchmarkTopicFromText(`${video.transcript || ""} ${video.ocr || ""}`);
-  if (contentMatch) return contentMatch;
-  const title = (video.title || "").replace(/[|:–—-].*$/, "").replace(/\b(как|урок|курс|обучение|для начинающих|с нуля)\b/gi, "").trim();
-  return title ? `${title} обучение` : inferTopic(video);
+  return classifyTopic(video).benchmark || "";
+}
+
+function topicKey(video) {
+  const classification = classifyTopic(video);
+  return classification.id && classification.id !== "unknown"
+    ? classification.id
+    : normalizeTopicText(video.topic || classification.label || "unknown");
+}
+
+function topicLabel(video) {
+  const classification = classifyTopic(video);
+  return classification.label !== "Без темы" ? classification.label : (video.topic || "Без темы");
 }
 
 function apiBase() {
@@ -236,13 +426,44 @@ async function readJsonResponse(response) {
   }
 }
 
+function visualObservationLines(observations = []) {
+  return observations.map((item, index) => (
+    `${index + 1}. ${item.time || "без таймкода"} | ${item.evidence || item.type || "визуальное наблюдение"} | ${item.note || ""}${item.thumbnail ? ` | thumbnail: ${item.thumbnail}` : ""}`
+  ));
+}
+
+function mediaAnalysisLines(media = null) {
+  if (!media) return [];
+  const rows = [];
+  if (media.audio) {
+    rows.push(`Аудио: ${media.audio.available ? "проанализировано" : "недоступно"}; оценка ${media.audio.score ?? "н/д"}/10; громкость ${media.audio.meanVolumeDb ?? "н/д"} dB; тишина ${media.audio.silenceRatio ?? "н/д"}. ${(media.audio.warnings || []).join(" ")}`);
+  }
+  if (media.video) {
+    rows.push(`Видео: ${media.video.available ? "проанализировано" : "недоступно"}; оценка ${media.video.score ?? "н/д"}/10; читаемость ${media.video.readabilityScore ?? "н/д"}/10; яркость ${media.video.averageBrightness ?? "н/д"}; контраст ${media.video.averageContrast ?? "н/д"}. ${(media.video.warnings || []).join(" ")}`);
+  }
+  if (media.ocr) {
+    rows.push(`OCR кадров: ${media.ocr.available ? "текст распознан" : "недоступен"}; кадров ${media.ocr.frames?.length || 0}. ${(media.ocr.warnings || []).join(" ")}`);
+  }
+  return rows.filter((row) => row.trim());
+}
+
 function applyYouTubeData(video) {
+  const classification = classifyTopic(video);
   els.videoUrl.value = video.url || els.videoUrl.value.trim();
   els.videoTitle.value = video.title || "";
-  els.videoTopic.value = video.topic || inferTopic(video);
+  els.videoTopic.value = video.topic || classification.label;
   els.transcript.value = video.transcript || "";
+  state.visualObservations = Array.isArray(video.visualObservations)
+    ? video.visualObservations.map((item) => ({ ...item }))
+    : [];
+  state.mediaAnalysis = video.mediaAnalysis ? structuredClone(video.mediaAnalysis) : null;
+  const visualLines = visualObservationLines(state.visualObservations);
+  const mediaLines = mediaAnalysisLines(state.mediaAnalysis);
   els.ocrText.value = [
     video.description ? `Описание YouTube:\n${video.description}` : "",
+    classification.label !== "Без темы" ? `\nТематика по данным ролика:\n${classification.label}; уверенность: ${classification.confidence}; признаки: ${(classification.evidence || []).join("; ") || "предметные маркеры не найдены"}` : "\nТематика по данным ролика:\nне определена достаточно надежно",
+    mediaLines.length ? `\nМедиа-анализ:\n${mediaLines.join("\n")}` : "",
+    visualLines.length ? `\nВизуальные наблюдения по экрану:\n${visualLines.join("\n")}` : "",
     video.source?.signals?.length ? `\nПолученные сигналы без файла:\n${video.source.signals.map((signal) => `- ${signal}`).join("\n")}` : "",
     video.source?.limitations?.length ? `\nОграничения:\n${video.source.limitations.map((item) => `- ${item}`).join("\n")}` : "",
     video.source?.note ? `\nПримечание анализа:\n${video.source.note}` : ""
@@ -280,7 +501,14 @@ async function fetchYouTubeData() {
       ? `${payload.source.captionType === "automatic" ? "автоматические" : "ручные"} субтитры найдены`
       : "транскрипт не найден";
     const modeMessage = payload.source?.mode === "stream" ? "файл не сохранялся" : "быстрый режим";
-    setFetchStatus(`Готово: ${transcriptMessage}, ${modeMessage}.`, "ok");
+    const mediaParts = [
+      payload.source?.audioAnalyzed ? "аудио" : "",
+      payload.source?.videoAnalyzed ? "видео" : "",
+      payload.source?.ocrAnalyzed ? "OCR" : ""
+    ].filter(Boolean);
+    const mediaMessage = mediaParts.length ? `, медиа-анализ: ${mediaParts.join(" + ")}` : "";
+    const visualMessage = payload.visualObservations?.length ? `, визуальных наблюдений: ${payload.visualObservations.length}` : "";
+    setFetchStatus(`Готово: ${transcriptMessage}, ${modeMessage}${mediaMessage}${visualMessage}.`, "ok");
   } catch (error) {
     setFetchStatus(`Не получилось получить данные: ${error.message}. Запустите локальный сервер или проверьте ссылку.`, "error");
   } finally {
@@ -291,38 +519,49 @@ async function fetchYouTubeData() {
 function currentVideoPayload() {
   const draft = {
     title: els.videoTitle.value.trim(),
+    topic: els.videoTopic.value.trim(),
     transcript: els.transcript.value.trim(),
     ocr: els.ocrText.value.trim()
   };
+  const topicClassification = classifyTopic(draft);
   return {
     id: state.selectedVideoId || crypto.randomUUID(),
     url: els.videoUrl.value.trim(),
     title: els.videoTitle.value.trim() || "Без названия",
-    topic: els.videoTopic.value.trim() || inferTopic(draft),
+    topic: els.videoTopic.value.trim() || topicClassification.label,
+    topicClassification,
     transcript: els.transcript.value.trim(),
     ocr: els.ocrText.value.trim(),
     audio: Number(els.audioQuality.value),
     video: Number(els.videoQuality.value),
     slides: Number(els.slideReadability.value),
     pace: Number(els.speechPace.value),
-    segments: state.segments.map((segment) => ({ ...segment }))
+    segments: state.segments.map((segment) => ({ ...segment })),
+    visualObservations: state.visualObservations.map((item) => ({ ...item })),
+    mediaAnalysis: state.mediaAnalysis ? structuredClone(state.mediaAnalysis) : null
   };
 }
 
 function calculateScores(video = null) {
+  const visualObservations = video ? (video.visualObservations || []) : state.visualObservations;
+  const visualText = visualObservationLines(visualObservations).join("\n");
+  const visualSignalText = visualObservations
+    .map((item) => `${item.evidence || ""} ${item.type || ""} ${item.topic || ""} ${item.source || ""}`)
+    .join(" ");
+  const inputData = video ? null : getInputs();
   const data = video
     ? {
         title: (video.title || "").trim(),
         topic: (video.topic || "").trim(),
         transcript: (video.transcript || "").trim(),
         ocr: (video.ocr || "").trim(),
-        combined: `${video.title || ""}\n${video.topic || ""}\n${video.transcript || ""}\n${video.ocr || ""}`,
+        combined: `${video.title || ""}\n${video.topic || ""}\n${video.transcript || ""}\n${video.ocr || ""}\n${visualText}`,
         audio: Number(video.audio),
         video: Number(video.video),
         slides: Number(video.slides),
         pace: Number(video.pace)
       }
-    : getInputs();
+    : { ...inputData, combined: `${inputData.combined}\n${visualText}` };
   const segments = video ? video.segments : state.segments;
   const textLength = data.transcript.length;
   const termHits = countHits(data.combined, ["термин", "модель", "метод", "принцип", "причина", "данные", "исслед"]);
@@ -342,6 +581,24 @@ function calculateScores(video = null) {
     ? segmentScores.reduce((sum, score) => sum + score, 0) / segmentScores.length
     : 0;
   const segmentDepthBonus = segmentQuality ? (segmentQuality - 5) * 0.28 : 0;
+  const visualScores = visualObservations.map((item) => Number(item.score)).filter((score) => Number.isFinite(score) && score > 0);
+  const visualQuality = visualScores.length
+    ? visualScores.reduce((sum, score) => sum + score, 0) / visualScores.length
+    : 0;
+  const visualInstructionPatterns = [
+    /слайд|презентац/i,
+    /демонстрац|screen|скрин|запись экрана/i,
+    /доска|whiteboard|board/i,
+    /(^|[^\p{L}\p{N}_])код([^\p{L}\p{N}_]|$)|python|javascript|typescript|sql|postgres|mysql|терминал|console|ide/iu,
+    /таблиц|график|диаграм|chart|table|spreadsheet/i,
+    /формул|уравнен|решени[ея]\s+задач|equation|formula/i,
+    /схем|mind map|flow|diagram/i,
+    /пример|кейс|case study|демо|demo/i,
+    /практик|задани|упражн|exercise|assignment|quiz/i
+  ];
+  const visualInstructionHits = visualInstructionPatterns.reduce((sum, pattern) => sum + (pattern.test(visualSignalText) ? 1 : 0), 0);
+  const visualFallbackActive = textLength < 220 && visualObservations.length > 0;
+  const visualFallbackBonus = visualFallbackActive ? Math.min(1.4, visualInstructionHits * 0.22 + Math.max(0, visualQuality - 5) * 0.18) : 0;
   const educationalFit = assessEducationalFit(data, segments, {
     exampleHits,
     practiceHits,
@@ -349,27 +606,30 @@ function calculateScores(video = null) {
     sourceHits,
     termHits,
     textLength,
-    practicalChapterHits
+    practicalChapterHits,
+    visualObservationCount: visualObservations.length,
+    visualInstructionHits,
+    visualFallbackActive
   });
 
   const scores = {
-    depth: clamp(3 + Math.min(textLength / 900, 2.1) + termHits * 0.55 + sourceHits * 0.35 + segmentDepthBonus - salesHits * 0.35),
-    pedagogy: clamp(2.5 + exampleHits * 0.75 + practiceHits * 0.85 + types * 0.35 + segmentBonus + Math.min(descriptionChapterHits, 6) * 0.18 + Math.max(0, segmentDepthBonus)),
-    structure: clamp(2.8 + structureHits * 0.75 + types * 0.6 + segmentBonus + Math.min(descriptionChapterHits, 8) * 0.28 + Math.min(mediaSegmentHits, 8) * 0.12 + (segmentQuality ? 0.35 : 0)),
+    depth: clamp(3 + Math.min(textLength / 900, 2.1) + termHits * 0.55 + sourceHits * 0.35 + segmentDepthBonus + visualFallbackBonus * 0.45 - salesHits * 0.35),
+    pedagogy: clamp(2.5 + exampleHits * 0.75 + practiceHits * 0.85 + types * 0.35 + segmentBonus + Math.min(descriptionChapterHits, 6) * 0.18 + Math.max(0, segmentDepthBonus) + visualFallbackBonus * 0.65),
+    structure: clamp(2.8 + structureHits * 0.75 + types * 0.6 + segmentBonus + Math.min(descriptionChapterHits, 8) * 0.28 + Math.min(mediaSegmentHits, 8) * 0.12 + (segmentQuality ? 0.35 : 0) + (visualObservations.length ? 0.35 : 0)),
     practice: clamp(2.2 + practiceHits * 1.1 + exampleHits * 0.45 + practicalChapterHits * 0.45 + segments.filter((segment) => /практика|задание|проверка/i.test(`${segment.type} ${segment.evidence || ""}`)).length * 0.35),
     reliability: clamp(2.8 + sourceHits * 1.25 - promiseHits * 1.2 - salesHits * 0.6),
     complexity: clamp(3 + termHits * 0.45 + types * 0.5 + (textLength > 1200 ? 1.1 : 0.4)),
-    technical: clamp((data.audio * 0.42) + (data.video * 0.34) + (data.slides * 0.24)),
-    communication: clamp((data.pace * 0.55) + (data.audio * 0.25) + structureHits * 0.25 + 1.2)
+    technical: clamp((data.audio * 0.32) + (data.video * 0.36) + (data.slides * 0.28) + (visualQuality ? Math.max(0, visualQuality - 5) * 0.08 : 0)),
+    communication: clamp((data.pace * 0.45) + (data.audio * 0.22) + structureHits * 0.25 + (visualObservations.length ? 0.35 : 0) + 1.2)
   };
   scores.educationalFitScore = educationalFit.score;
 
-  return { scores, data, flags: { salesHits, promiseHits, sourceHits, practiceHits, textLength, educationalFit, segmentQuality } };
+  return { scores, data, flags: { salesHits, promiseHits, sourceHits, practiceHits, textLength, educationalFit, segmentQuality, visualQuality, visualObservationCount: visualObservations.length, visualFallbackActive } };
 }
 
 function analyzeVideo(video) {
   const { scores, flags, data } = calculateScores(video);
-  const total = weightedTotal(scores);
+  const total = flags.educationalFit.exclude ? null : weightedTotal(scores);
   const risks = buildRisks(scores, flags, data);
   return {
     ...video,
@@ -382,79 +642,151 @@ function analyzeVideo(video) {
   };
 }
 
-function assessEducationalFit(data, segments, signals) {
-  const text = data.combined.toLowerCase();
-  const title = data.title.toLowerCase();
-  const segmentText = segments.map((segment) => `${segment.type} ${segment.note}`).join(" ").toLowerCase();
-  const formatHits = countHits(text, [
-    "обучение", "обучающий", "урок", "курс", "лекция", "семинар", "tutorial", "lesson", "course"
+function assessEducationalFit(data = {}, segments = [], signals = {}) {
+  const text = (data.combined || `${data.title || ""}\n${data.topic || ""}\n${data.transcript || ""}\n${data.ocr || ""}`).toLowerCase();
+  const title = (data.title || "").toLowerCase();
+  const titleAndTopic = `${data.title || ""} ${data.topic || ""}`.toLowerCase();
+  const segmentText = segments.map((segment) => `${segment.type || ""} ${segment.note || ""}`).join(" ").toLowerCase();
+
+  const titleEducationHits = regexHits(titleAndTopic, [
+    /(^|\s)(урок|лекци[яи]|курс|семинар|вебинар|tutorial|lesson|lecture|course|guide)(\s|$)/i,
+    /обуч|учеб|науч|изуч|разбер|объясн|решаем|решени[ея]|практик|тренаж[её]р|гайд|guide|walkthrough/i
   ]);
+
+  const subjectMatterHits = regexHits(`${titleAndTopic} ${text}`, [
+    /математ|алгебр|геометр|calculus|физик|хими|биологи|истори[яи]|географ/i,
+    /англий|english|grammar|vocabulary|ielts|toefl|немец|deutsch|испан|француз|япон|китай/i,
+    /python|javascript|typescript|react|node|sql|postgres|программ|кодинг|разработк|баз[аы]\s+данных|ux|ui|figma|trading|трейдинг/i
+  ]);
+
+  const formatHits = countHits(text, ["обуч", "учеб", "урок", "курс", "лекция", "семинар", "объясн", "tutorial", "lesson", "course", "learning", "гайд", "guide", "walkthrough", "how to"]);
   const methodHits = countHits(text, [
-    "разберем", "разбираем", "решим", "решаем", "покажу как", "пошаг", "шаг за шагом",
-    "пример", "кейс", "формула", "алгоритм", "метод", "правило", "схема", "how to", "step by step"
+    "разберем", "разбираем", "решим", "решаем", "покажу как", "пошаг", "разбор", "пример", "кейс", "формула", "алгоритм", "метод",
+    "explain", "explained", "define", "definition", "step by step", "walkthrough", "demo", "demonstration", "solve", "solution"
   ]);
   const practiceOrCheckHits = countHits(text, [
-    "задание", "упражнение", "практика", "практическое", "домашнее задание", "проверь", "проверка",
-    "тест", "самостоятельно", "решите", "попробуйте", "practice", "exercise", "quiz"
+    "задание", "упражнение", "практик", "проверь", "проверка", "тест", "practice", "exercise", "quiz", "assignment", "homework", "check your answer"
   ]);
-  const goalHits = countHits(text, ["цель урока", "вы научитесь", "научимся", "после урока", "сможете", "навык", "учебн", "learning objective"]);
-  const nonLearningHits = countHits(text, [
-    "интервью", "подкаст", "новости", "новость", "реакция", "vlog", "развлекатель",
-    "документальный", "документалка", "интересные факты", "топ фактов", "обзор событий",
-    "обзор", "история", "биография", "размышления", "мнение", "почему это важно", "что происходит",
-    "приятного просмотра", "семейный канал", "детский канал", "мультфильм", "сборник серий", "лайки", "подписывайтесь"
+  const goalHits = countHits(text, [
+    "цель урока", "цель обучения", "упр", "результат обучения", "вы научитесь", "навык",
+    "learning objective", "goal of the lesson", "you will learn", "by the end of this lesson"
   ]);
-  const hasLearningSegments = /практи|задани|упраж|пример|разбор|провер/i.test(segmentText);
-  const hasChapterStructure = segments.filter((segment) => segment.source === "description").length >= 3;
-  const hasCaptionStructure = segments.filter((segment) => segment.source === "captions").length >= 3;
-  const hasCourseLikeStructure = hasChapterStructure || hasCaptionStructure;
+
+  const hardNonLearningHits = countHits(text, [
+    "интервью", "беседа", "подкаст", "новости", "реакция", "vlog", "развлекатель",
+    "документальный", "обзор", "биография", "размышления", "мнение", "opinion", "ток-шоу",
+    "реклама", "реклам", "пранк", "юмор", "концерт", "клип", "стрим", "трансляция", "игра", "игровой"
+  ]);
+
+  const motivationalMarkers = countHits(text, [
+    "верь в себя", "поверить в себя", "верьте в себя", "можешь ты", "сможешь ты", "будешь успешн",
+    "преуспев", "разбогатеть", "заработай", "зарабатывай", "работает у нас", "работает со мной",
+    "система работает", "это работает", "я докажу"
+  ]);
+
+  const quickPromiseMarkers = countHits(text, [
+    "за неделю", "за день", "за час", "за 30 дней", "за 7 дней",
+    "быстро", "быстрый", "в кратчайшие", "мгновенно", "сразу же",
+    "простой способ", "легкий путь", "без усилий", "без работы", "легко и просто"
+  ]);
+
+  const salesPushMarkers = countHits(text, [
+    "купи", "купить", "заказ", "заказать", "подпишись", "подписывайтесь", "лайки",
+    "скидка", "скидку", "бонус", "подарок", "осталось мест", "спешите",
+    "ограниченное предложение", "только сегодня", "только для вас", "эксклюзивно"
+  ]);
+
+  const guaranteeMarkers = countHits(text, [
+    "гарантиров", "обещаю", "обещание", "научу за", "научишься за", "научу", "научиться",
+    "станьте экспертом", "станешь экспертом", "эксперт за", "профессионал за", "эксперта за",
+    "результат за", "успех за", "деньги назад", "путь до эксперта", "путь к успеху", "станет"
+  ]);
+
+  const hasLearningSegments = /практи|задани|упраж|пример|разбор|провер|exercise|assignment|example|practice|step by step|walkthrough/i.test(segmentText);
+  const hasChapterStructure = segments.filter((s) => s.source === "description").length >= 3;
+  const hasCaptionStructure = segments.filter((s) => s.source === "captions").length >= 3;
+  const hasSegmentedLearningFlow = segments.length >= 3 && hasLearningSegments;
+  const hasVisualStructure = signals.visualObservationCount >= 2;
+  const hasVisualTeachingCore = hasVisualStructure && signals.visualInstructionHits > 1;
   const hasLectureFormat = /лекци|lecture|chapter|глава|серия|часть|модуль|course|курс/i.test(text);
-  const hasPractice = practiceOrCheckHits > 0 || signals.practiceHits > 0 || signals.practicalChapterHits > 0;
+  const hasCourseLikeStructure = hasChapterStructure || hasCaptionStructure || hasSegmentedLearningFlow;
+
   const hasInstructionalFormat = formatHits > 0 || /урок|курс|обуч|tutorial|lesson|course/i.test(title);
-  const hasMethod = methodHits > 0 || signals.exampleHits > 0 || hasLearningSegments;
-  const hasGoal = goalHits > 0;
-  const hasTeachingCore = hasMethod || hasGoal || signals.practicalChapterHits > 0 || hasCourseLikeStructure || hasLectureFormat || /подробно объясн|объясн|темы.*рассмотр|план урока|содержание урока|what is|why|how|introducing|recap/i.test(text);
-  const strongInfotainment = nonLearningHits > 0 && !hasTeachingCore;
-  const onlyHomeworkOrViewing = hasPractice && !hasTeachingCore && /домашнее задание|делаем.*задани|приятного просмотра|семейный канал|детский канал/i.test(text);
-  const learningEvidence = [
-    hasInstructionalFormat,
-    hasMethod,
-    hasPractice,
-    hasGoal,
-    hasCourseLikeStructure || hasLectureFormat
-  ].filter(Boolean).length;
+  const hasMethod = methodHits > 0 || hasLearningSegments;
+  const hasPractice = practiceOrCheckHits > 0 && !/нет[^.\n]{0,35}практик|без\s+практик|no\s+practice|without\s+practice/i.test(text);
+  const hasGoal = goalHits > 0 && !/нет[^.\n]{0,35}цел[ьи]|без\s+цели|no\s+clear\s+goal|without\s+goal/i.test(text);
+  const mechanicsCount = [hasMethod, hasPractice, hasGoal, hasCourseLikeStructure || hasLectureFormat || hasVisualTeachingCore].filter(Boolean).length;
+
+  const hasStrongTeachingCore = (hasMethod && hasGoal) || (hasPractice && (hasMethod || hasCourseLikeStructure || hasLectureFormat || hasVisualTeachingCore));
+  const hasEducationalIntent = titleEducationHits > 0 || formatHits >= 1 || (subjectMatterHits > 0 && (hasInstructionalFormat || hasMethod || hasLectureFormat || hasCourseLikeStructure));
+  const hasEducationalMechanics = hasMethod || hasPractice || hasGoal || hasCourseLikeStructure || hasLectureFormat || hasVisualTeachingCore;
+  const hasEducationalSignal = hasStrongTeachingCore || (hasEducationalIntent && hasEducationalMechanics && mechanicsCount >= 2);
+
+  const learningEvidence = [hasInstructionalFormat, hasMethod, hasPractice, hasGoal, hasChapterStructure || hasCaptionStructure || hasSegmentedLearningFlow, mechanicsCount >= 2].filter(Boolean).length;
+
   const score = Math.max(0, Math.min(10,
     1.5 +
     (hasInstructionalFormat ? 2 : 0) +
     (hasMethod ? 2 : 0) +
     (hasPractice ? 1.5 : 0) +
     (hasGoal ? 1.2 : 0) +
-    (hasCourseLikeStructure ? 1.4 : 0) +
-    (hasLectureFormat ? 1 : 0) -
-    (strongInfotainment ? 3 : 0) -
-    (onlyHomeworkOrViewing ? 2.5 : 0) -
-    Math.min(nonLearningHits, 3) * 0.45
+    (hasChapterStructure ? 1.2 : 0) +
+    (hasSegmentedLearningFlow ? 0.8 : 0) +
+    (mechanicsCount >= 2 ? 0.9 : 0) +
+    (hasEducationalIntent ? 0.9 : 0) -
+    (hardNonLearningHits ? Math.min(hardNonLearningHits, 3) * 0.9 : 0)
   ));
-  const exclude = score < 3.2 || strongInfotainment || onlyHomeworkOrViewing;
+
+  const strongInfotainment = hardNonLearningHits > 0 && mechanicsCount < 2;
+  const onlyHomeworkOrViewing = hasPractice && !hasEducationalSignal && /домашнее задание|приятного просмотра/i.test(text);
+
+  const isSelfHelpMotivational = (motivationalMarkers >= 2 || quickPromiseMarkers >= 3) && !hasPractice && !hasMethod;
+  const isSalesHeavy = salesPushMarkers >= 2 && (guaranteeMarkers >= 1 || mechanicsCount < 2);
+  const hasOverpromising = (guaranteeMarkers >= 2 || quickPromiseMarkers >= 4) && !hasGoal && !hasMethod;
+  const isAggressiveMarketing = quickPromiseMarkers >= 4 && salesPushMarkers >= 3;
+  const noTeachingMechanism = mechanicsCount < 2;
+  const isOverviewWithoutTeachingCore = /обзор|review|discussion|react/i.test(text) && !hasGoal && !hasPractice;
+  const isSalesLeadWithoutPractice = salesPushMarkers >= 1 && !hasPractice && !hasGoal && !hasCourseLikeStructure;
+  const exclude = !hasEducationalSignal || strongInfotainment || onlyHomeworkOrViewing || score < 2.5 || isSalesHeavy || hasOverpromising || isSelfHelpMotivational || isAggressiveMarketing || noTeachingMechanism || isOverviewWithoutTeachingCore || isSalesLeadWithoutPractice;
   const eligible = !exclude && score >= 5;
   const weak = !exclude && score < 5;
+
   const reasons = [];
-  if (formatHits) reasons.push(`формат обучения: ${formatHits}`);
-  if (methodHits || signals.exampleHits) reasons.push("есть разбор, метод или примеры");
-  if (hasPractice) reasons.push("есть практика, задания или проверка");
-  if (goalHits) reasons.push("есть учебная цель/результат");
-  if (hasCourseLikeStructure) reasons.push("есть структура по главам или субтитрам");
-  if (hasLectureFormat) reasons.push("лекционный/курсовой формат");
-  if (nonLearningHits) reasons.push(`познавательные/медийные маркеры: ${nonLearningHits}`);
-  if (!hasTeachingCore) reasons.push("нет ядра преподавания: разбор метода, объяснение, учебная цель или план урока");
-  if (weak) reasons.push("учебный формат слабый: рейтинг будет снижен, но видео не исключено");
+  if (hardNonLearningHits) reasons.push(`медийные маркеры: ${hardNonLearningHits}`);
+  if (motivationalMarkers >= 2) reasons.push(`мотивационный контент: ${motivationalMarkers}`);
+  if (quickPromiseMarkers >= 3) reasons.push(`обещания быстрого результата: ${quickPromiseMarkers}`);
+  if (salesPushMarkers >= 3) reasons.push(`агрессивные продажи: ${salesPushMarkers}`);
+  if (guaranteeMarkers >= 2) reasons.push(`гарантии и переуспевание: ${guaranteeMarkers}`);
+  if (!hasEducationalSignal) reasons.push("видео не имеет достаточной учебной структуры или цели");
+  if (isSalesHeavy) reasons.push("контент перегружен продажами вместо обучения");
+  if (hasOverpromising) reasons.push("видео содержит завышенные обещания без методологии");
+  if (isSelfHelpMotivational) reasons.push("контент мотивационный, без конкретной методики и практики");
+  if (noTeachingMechanism) reasons.push("недостаточно учебной механики: нет цели/метода/практики в достаточном объеме");
+  if (isOverviewWithoutTeachingCore) reasons.push("обзорный формат без явной учебной цели и практики");
+  if (isSalesLeadWithoutPractice) reasons.push("продвижение курса преобладает над учебной частью");
+  if (weak) reasons.push("учебный формат слабый: рейтинг будет снижен");
   if (exclude) reasons.push("слишком мало признаков обучения или формат явно медийный");
-  return { eligible, weak, exclude, score: Number(score.toFixed(1)), learningEvidence, instructionHits: formatHits + methodHits + practiceOrCheckHits, goalHits, nonLearningHits, reasons };
+
+  return {
+    eligible,
+    weak,
+    exclude,
+    score: Number(score.toFixed(1)),
+    learningEvidence,
+    reasons,
+    markers: {
+      hardNonLearningHits,
+      motivationalMarkers,
+      quickPromiseMarkers,
+      salesPushMarkers,
+      guaranteeMarkers
+    }
+  };
 }
 
 function weightedTotal(scores) {
   const raw = rawWeightedTotal(scores);
-  const cap = depthRatingCap(scores);
+  const cap = majorQualityCap(scores);
   const educationalCap = educationalFitCap(scores);
   return [cap?.max, educationalCap?.max]
     .filter((value) => Number.isFinite(value))
@@ -465,20 +797,40 @@ function rawWeightedTotal(scores) {
   return Math.round(scales.reduce((sum, scale) => sum + scores[scale.id] * scale.weight, 0) / 10);
 }
 
-function depthRatingCap(scores) {
-  const depth = Number(scores.depth || 0);
-  if (depth < 2) return { max: 25, grade: "E", reason: "содержательная глубина ниже 2/10" };
-  if (depth < 3) return { max: 35, grade: "E", reason: "содержательная глубина ниже 3/10" };
-  if (depth < 4) return { max: 50, grade: "D", reason: "содержательная глубина ниже 4/10" };
-  if (depth < 5) return { max: 60, grade: "C", reason: "содержательная глубина ниже 5/10" };
-  if (depth < 6) return { max: 70, grade: "B", reason: "содержательная глубина ниже 6/10" };
-  if (depth < 7) return { max: 82, grade: "B", reason: "содержательная глубина ниже 7/10" };
+function majorQualityProfile(scores) {
+  const values = {
+    depth: Number(scores.depth || 0),
+    pedagogy: Number(scores.pedagogy || 0),
+    structure: Number(scores.structure || 0),
+    reliability: Number(scores.reliability || 0)
+  };
+  const weighted = (
+    values.depth * 0.32 +
+    values.pedagogy * 0.25 +
+    values.structure * 0.22 +
+    values.reliability * 0.21
+  );
+  const weak = Object.entries(values)
+    .filter(([, value]) => value < 4.5)
+    .map(([key]) => key);
+  return { values, weak, weighted };
+}
+
+function majorQualityCap(scores) {
+  const profile = majorQualityProfile(scores);
+  const core = profile.weighted;
+  if (core < 3.5) return { max: 45, grade: "E", reason: "методологическое ядро ниже 3.5/10" };
+  if (core < 4.5) return { max: 58, grade: "D", reason: "методологическое ядро ниже 4.5/10" };
+  if (core < 5.5) return { max: 70, grade: "B", reason: "методологическое ядро ниже 5.5/10" };
+  if (profile.weak.length >= 3) return { max: 66, grade: "C", reason: "слабые сразу несколько ключевых шкал: глубина, педагогика, структура или достоверность" };
+  if (core < 6.5) return { max: 82, grade: "B", reason: "методологическое ядро ниже 6.5/10" };
+  if (profile.weak.length >= 2) return { max: 78, grade: "B", reason: "две ключевые шкалы ниже рабочего порога" };
   return null;
 }
 
 function ratingCapNote(scores) {
   const raw = rawWeightedTotal(scores);
-  const notes = [depthRatingCap(scores), educationalFitCap(scores)]
+  const notes = [majorQualityCap(scores), educationalFitCap(scores)]
     .filter((cap) => cap && raw > cap.max)
     .map((cap) => `до ${cap.max}: ${cap.reason}`);
   if (!notes.length) return "";
@@ -488,8 +840,10 @@ function ratingCapNote(scores) {
 function educationalFitCap(scores) {
   const fit = scores.educationalFitScore;
   if (!Number.isFinite(fit)) return null;
-  if (fit < 5) return { max: 62, reason: "слабые признаки учебного формата" };
-  if (fit < 6) return { max: 72, reason: "обучающий формат выражен умеренно" };
+  const core = majorQualityProfile(scores).weighted;
+  if (fit < 4.5) return { max: 62, reason: "слабые признаки учебного формата" };
+  if (fit < 5.5) return { max: core >= 6.5 ? 78 : 70, reason: "обучающий формат выражен умеренно" };
+  if (fit < 6.2 && core < 6.5) return { max: 82, reason: "обучающий формат требует подтверждения сильным методологическим ядром" };
   return null;
 }
 
@@ -594,26 +948,56 @@ function renderSegments() {
   state.segments.forEach((segment, index) => {
     const card = document.createElement("article");
     card.className = "segment-card";
+
+    const timeLabel = document.createElement("label");
+    const timeLabelName = document.createElement("span");
+    timeLabelName.textContent = "Таймкод";
+    const timeInput = document.createElement("input");
+    timeInput.value = String(segment.time || "");
+    timeInput.dataset.field = "time";
+    timeInput.dataset.index = String(index);
+    timeInput.placeholder = "00:00-01:00";
+    timeLabel.append(timeLabelName, timeInput);
+
+    const typeLabel = document.createElement("label");
+    const typeLabelName = document.createElement("span");
+    typeLabelName.textContent = "Тип";
+    const typeInput = document.createElement("input");
+    typeInput.value = String(segment.type || "");
+    typeInput.dataset.field = "type";
+    typeInput.dataset.index = String(index);
+    typeInput.placeholder = "теория";
+    typeLabel.append(typeLabelName, typeInput);
+
+    const noteLabel = document.createElement("label");
+    const noteLabelName = document.createElement("span");
+    noteLabelName.textContent = "Наблюдение";
+    const noteInput = document.createElement("input");
+    noteInput.value = String(segment.note || "");
+    noteInput.dataset.field = "note";
+    noteInput.dataset.index = String(index);
+    noteInput.placeholder = "пример, источник, упражнение";
+    noteLabel.append(noteLabelName, noteInput);
+
     const score = Number(segment.score);
-    const meta = Number.isFinite(score)
-      ? `<span class="segment-meta">Оценка сегмента <b>${score.toFixed(1)}</b> · ${escapeHtml(segment.evidence || segment.source || "авто")}</span>`
-      : `<span class="segment-meta">${escapeHtml(segment.source || "ручной сегмент")}</span>`;
-    card.innerHTML = `
-      <label>
-        <span>Таймкод</span>
-        <input value="${segment.time}" data-field="time" data-index="${index}" placeholder="00:00-01:00">
-      </label>
-      <label>
-        <span>Тип</span>
-        <input value="${segment.type}" data-field="type" data-index="${index}" placeholder="теория">
-      </label>
-      <label>
-        <span>Наблюдение</span>
-        <input value="${segment.note}" data-field="note" data-index="${index}" placeholder="пример, источник, упражнение">
-      </label>
-      ${meta}
-      <button type="button" aria-label="Удалить сегмент" data-remove="${index}">×</button>
-    `;
+    const meta = document.createElement("span");
+    meta.className = "segment-meta";
+    if (Number.isFinite(score)) {
+      meta.append("Оценка сегмента ");
+      const strong = document.createElement("b");
+      strong.textContent = score.toFixed(1);
+      meta.append(strong, ` · ${segment.evidence || segment.source || "авто"}`);
+    } else {
+      meta.textContent = segment.source || "ручной сегмент";
+    }
+
+    const removeButton = document.createElement("button");
+    removeButton.type = "button";
+    removeButton.setAttribute("aria-label", "Удалить сегмент");
+    removeButton.dataset.remove = String(index);
+    removeButton.textContent = "×";
+
+    card.append(timeLabel, typeLabel, noteLabel, meta, removeButton);
     els.segments.appendChild(card);
   });
   renderTimecodeAudit();
@@ -714,8 +1098,19 @@ function buildRisks(scores, flags, data) {
     return risks;
   }
   if (flags.educationalFit.weak) risks.push(["medium", "Слабый обучающий формат", `Видео похоже на обучающее, но учебная механика выражена слабо. Оценка обучающего формата: ${flags.educationalFit.score}/10.`]);
-  if (scores.depth < 5) risks.push(["high", "Слабая содержательная глубина", "Итоговый рейтинг жестко ограничен: без достаточной глубины ролик не может получить высокий образовательный класс."]);
-  else if (scores.depth < 7) risks.push(["medium", "Недостаточная глубина для A-класса", "Ролик может быть полезным, но содержательность не дотягивает до уровня сильного учебного образца."]);
+  const majorProfile = majorQualityProfile(scores);
+  if (majorProfile.weighted < 5) {
+    risks.push(["high", "Слабое методологическое ядро", "Итог ограничен не одной глубиной, а связкой ключевых шкал: содержательность, педагогика, структура и достоверность."]);
+  } else if (majorProfile.weighted < 6.5 || majorProfile.weak.length) {
+    const weakLabels = {
+      depth: "глубина",
+      pedagogy: "педагогика",
+      structure: "структура",
+      reliability: "достоверность"
+    };
+    const weakText = majorProfile.weak.map((key) => weakLabels[key]).join(", ");
+    risks.push(["medium", "Ключевые шкалы требуют усиления", weakText ? `Ниже рабочего порога: ${weakText}.` : "Методологическое ядро пока не дотягивает до A-класса."]);
+  }
   if (flags.promiseHits > 0) risks.push(["high", "Завышенные обещания", "Найдены формулировки вроде быстрого гарантированного результата. Это снижает доверие к образовательной ценности."]);
   if (flags.salesHits > 0) risks.push(["medium", "Смещение в продажи", "В транскрипте есть маркетинговые маркеры. Проверьте, не подменяется ли обучение мотивацией или оффером."]);
   if (flags.sourceHits === 0) risks.push(["high", "Нет явных источников", "Утверждения не подкреплены источниками, данными или проверяемыми ссылками."]);
@@ -730,7 +1125,11 @@ function renderRisks(risks) {
   risks.forEach(([level, title, body]) => {
     const item = document.createElement("article");
     item.className = `risk ${level}`;
-    item.innerHTML = `<strong>${title}</strong><p>${body}</p>`;
+    const heading = document.createElement("strong");
+    heading.textContent = title;
+    const text = document.createElement("p");
+    text.textContent = body;
+    item.append(heading, text);
     els.riskList.appendChild(item);
   });
 }
@@ -745,6 +1144,9 @@ function renderEvidence(scores, flags = null) {
   } else if (flags?.educationalFit?.weak) {
     rows.push(["Классификация", `Видео допущено к рейтингу со штрафом за слабый обучающий формат. Оценка формата: ${flags.educationalFit.score}/10. Причины: ${flags.educationalFit.reasons.join("; ")}.`]);
   }
+  if (flags?.visualObservationCount) {
+    rows.push(["Визуальный слой", `Учтено визуальных наблюдений: ${flags.visualObservationCount}. ${flags.visualFallbackActive ? "Транскрипт слабый или отсутствует, поэтому экран влияет на оценку сильнее." : "Экран используется как дополнительное доказательство к речи и сегментам."}`]);
+  }
   const capNote = ratingCapNote(scores);
   if (capNote) rows.push(["Потолок рейтинга", capNote]);
   rows.push(["Сводка шкал", `Максимальные зоны: ${topScales(scores).join(", ")}.`]);
@@ -752,23 +1154,327 @@ function renderEvidence(scores, flags = null) {
   rows.forEach(([title, body]) => {
     const item = document.createElement("article");
     item.className = "evidence";
-    item.innerHTML = `<strong>${title}</strong><p>${body}</p>`;
+    const heading = document.createElement("strong");
+    heading.textContent = title;
+    const text = document.createElement("p");
+    text.textContent = body;
+    item.append(heading, text);
     els.evidenceList.appendChild(item);
   });
 }
 
+function buildRatingPrompt(video, scores, flags, risks) {
+  const topicInfo = video.topicClassification || classifyTopic(video);
+  const scaleLines = scales.map((scale) => {
+    const score = scores[scale.id]?.toFixed ? scores[scale.id].toFixed(1) : scores[scale.id];
+    return `- ${scale.label}: вес ${scale.weight}%, текущая оценка ${score}/10`;
+  }).join("\n");
+  const segmentLines = video.segments.map((segment, index) => (
+    `${index + 1}. ${segment.time} | ${segment.type} | ${segment.topic || ""} | ${segment.evidence || ""} | ${segment.note || ""}`
+  )).join("\n");
+  const visualLines = visualObservationLines(video.visualObservations || []).join("\n");
+  const mediaLines = mediaAnalysisLines(video.mediaAnalysis).join("\n");
+  const riskLines = risks.map(([level, title, body]) => `- [${level}] ${title}: ${body}`).join("\n");
+  return `Ты эксперт по методологии Green Argus Index. Оцени образовательный YouTube-ролик только по данным ниже, не учитывая внешнюю репутацию автора, харизму или маркетинговые обещания.
+
+ЗАДАЧА:
+1. Проверь, является ли ролик обучающим, а не просто познавательным или развлекательным.
+2. Оцени 8 шкал от 0 до 10.
+3. Привяжи аргументы к сегментам и таймкодам.
+4. Найди красные флаги.
+5. Верни итоговый рейтинг 0-100 и класс A-E.
+6. Если транскрипт отсутствует или ролик фактически без звука, оцени обучение по визуальному ряду: что видно на экране, есть ли объясняющие действия, слайды/доска/код/формулы, читаемость, пошаговость и связь визуала с учебной задачей.
+
+ВЕСА ШКАЛ:
+${scaleLines}
+
+ВИДЕО:
+URL: ${video.url}
+Название: ${video.title}
+Тематика: ${video.topic}
+Определение тематики: ${topicInfo.label}; уверенность ${topicInfo.confidence}; признаки: ${(topicInfo.evidence || []).join("; ") || "нет надежных предметных маркеров"}
+Режим анализа: ${els.analysisMode.value}
+
+ТЕКУЩИЙ РАСЧЕТ:
+Итог: ${flags.educationalFit.exclude ? NOT_AVAILABLE_LABEL : weightedTotal(scores)}
+Класс: ${flags.educationalFit.exclude ? "N/A" : gradeFor(weightedTotal(scores))}
+Оценка обучающего формата: ${flags.educationalFit.score}/10
+Причины классификации: ${flags.educationalFit.reasons.join("; ")}
+
+СЕГМЕНТЫ:
+${segmentLines || "Сегменты не найдены."}
+
+ВИЗУАЛЬНЫЕ НАБЛЮДЕНИЯ ПО ЭКРАНУ:
+${visualLines || "Визуальные наблюдения отсутствуют."}
+
+МЕДИА-АНАЛИЗ:
+${mediaLines || "Медиа-анализ аудио/видео недоступен."}
+
+КРАСНЫЕ ФЛАГИ:
+${riskLines}
+
+ТРАНСКРИПТ:
+${video.transcript || "Транскрипт отсутствует."}
+
+ОПИСАНИЕ/OCR:
+${video.ocr || "Описание/OCR отсутствует."}
+
+ФОРМАТ ОТВЕТА:
+Верни JSON с полями: is_educational, total, grade, scales, segment_evidence, strengths, risks, limitations.`;
+}
+
+function xmlEscape(value) {
+  return String(value ?? "")
+    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, " ")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&apos;");
+}
+
+function excelCell(value) {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return `<Cell><Data ss:Type="Number">${value}</Data></Cell>`;
+  }
+  if (typeof value === "boolean") {
+    return `<Cell><Data ss:Type="String">${value ? "TRUE" : "FALSE"}</Data></Cell>`;
+  }
+  return `<Cell><Data ss:Type="String">${xmlEscape(value)}</Data></Cell>`;
+}
+
+function excelRow(values) {
+  return `<Row>${values.map(excelCell).join("")}</Row>`;
+}
+
+function excelSheet(name, rows) {
+  const safeName = String(name).replace(/[\[\]:*?/\\]/g, " ").slice(0, 31);
+  return `<Worksheet ss:Name="${xmlEscape(safeName)}"><Table>${rows.map(excelRow).join("")}</Table></Worksheet>`;
+}
+
+function chunkTextRows(label, text, chunkSize = 30000) {
+  const value = String(text || "");
+  if (!value) return [[label, 1, ""]];
+  const rows = [];
+  for (let index = 0; index < value.length; index += chunkSize) {
+    rows.push([label, rows.length + 1, value.slice(index, index + chunkSize)]);
+  }
+  return rows;
+}
+
+function downloadExcelWorkbook(filename, sheets) {
+  const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<?mso-application progid="Excel.Sheet"?>
+<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet"
+ xmlns:o="urn:schemas-microsoft-com:office:office"
+ xmlns:x="urn:schemas-microsoft-com:office:excel"
+ xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">
+${sheets.map((sheet) => excelSheet(sheet.name, sheet.rows)).join("")}
+</Workbook>`;
+  const blob = new Blob([xml], { type: "application/vnd.ms-excel;charset=utf-8" });
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(blob);
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  URL.revokeObjectURL(link.href);
+  link.remove();
+}
+
+function safeFileName(value) {
+  return String(value || "green-a-rating")
+    .trim()
+    .replace(/[\\/:*?"<>|]+/g, " ")
+    .replace(/\s+/g, "-")
+    .slice(0, 80) || "green-a-rating";
+}
+
+function exportRatingData() {
+  if (!state.hasLoadedVideo) {
+    setFetchStatus("Сначала запустите анализ ролика, потом скачайте Excel.", "error");
+    return;
+  }
+  const video = currentVideoPayload();
+  const { scores, flags, data } = calculateScores();
+  const total = flags.educationalFit.exclude ? null : weightedTotal(scores);
+  const grade = flags.educationalFit.exclude ? "N/A" : gradeFor(total);
+  const risks = buildRisks(scores, flags, data);
+  const timecodeIssues = validateTimecodes();
+  const audienceRows = audienceFit(scores, flags, data);
+  const prompt = buildRatingPrompt(video, scores, flags, risks);
+  const popularLeaders = state.popularBenchmark?.leaders || (state.popularBenchmark?.leader ? [state.popularBenchmark.leader] : []);
+  const topicInfo = video.topicClassification || classifyTopic(video);
+
+  const sheets = [
+    {
+      name: "Промпт",
+      rows: [
+        ["Поле", "Часть", "Значение"],
+        ...chunkTextRows("Готовый промпт для рейтингования", prompt)
+      ]
+    },
+    {
+      name: "Видео",
+      rows: [
+        ["Поле", "Значение"],
+        ["URL", video.url],
+        ["Название", video.title],
+        ["Тематика", video.topic],
+        ["Тематика: уверенность", topicInfo.confidence || ""],
+        ["Тематика: предметные признаки", (topicInfo.evidence || []).join("; ")],
+        ["Тематика: альтернативы", (topicInfo.alternatives || []).map((item) => `${item.label}: ${item.score}`).join("; ")],
+        ["Benchmark topic", benchmarkTopic(video)],
+        ["Режим анализа", els.analysisMode.value],
+        ["Итоговый балл", total ?? NOT_AVAILABLE_LABEL],
+        ["Класс", grade],
+        ["Обучающий формат, 0-10", flags.educationalFit.score],
+        ["Исключено из рейтинга", flags.educationalFit.exclude],
+        ["Слабый обучающий формат", flags.educationalFit.weak],
+        ["Причины классификации", flags.educationalFit.reasons.join("; ")],
+        ["Качество звука", Number(video.audio)],
+        ["Качество видео", Number(video.video)],
+        ["Читаемость слайдов", Number(video.slides)],
+        ["Темп речи", Number(video.pace)],
+        ["Среднее качество сегментов", flags.segmentQuality ? Number(flags.segmentQuality.toFixed(2)) : 0],
+        ["Визуальных наблюдений", flags.visualObservationCount || 0],
+        ["Визуальный fallback включен", Boolean(flags.visualFallbackActive)],
+        ["Среднее качество визуальных наблюдений", flags.visualQuality ? Number(flags.visualQuality.toFixed(2)) : 0]
+      ]
+    },
+    {
+      name: "Шкалы",
+      rows: [
+        ["ID", "Шкала", "Вес, %", "Оценка 0-10", "Вклад в 100-балльный рейтинг"],
+        ...scales.map((scale) => [
+          scale.id,
+          scale.label,
+          scale.weight,
+          Number(scores[scale.id].toFixed(2)),
+          Number(((scores[scale.id] * scale.weight) / 10).toFixed(2))
+        ])
+      ]
+    },
+    {
+      name: "Сегменты",
+      rows: [
+        ["#", "Таймкод", "Тип", "Тема", "Источник", "Оценка сегмента", "Признаки", "Наблюдение"],
+        ...video.segments.map((segment, index) => [
+          index + 1,
+          segment.time,
+          segment.type,
+          segment.topic || "",
+          segment.source || "",
+          Number(segment.score || 0),
+          segment.evidence || "",
+          segment.note || ""
+        ])
+      ]
+    },
+    {
+      name: "Визуал",
+      rows: [
+        ["#", "Таймкод", "Тип", "Источник", "Оценка", "Признаки на экране", "Описание наблюдения", "Thumbnail"],
+        ...(video.visualObservations?.length ? video.visualObservations.map((item, index) => [
+          index + 1,
+          item.time || "",
+          item.type || "",
+          item.source || "visual",
+          Number(item.score || 0),
+          item.evidence || "",
+          item.note || "",
+          item.thumbnail || ""
+        ]) : [["", "", "", "", "", "", "Визуальные наблюдения отсутствуют.", ""]])
+      ]
+    },
+    {
+      name: "Медиа",
+      rows: [
+        ["Тип", "Поле", "Значение"],
+        ["audio", "available", Boolean(video.mediaAnalysis?.audio?.available)],
+        ["audio", "score", video.mediaAnalysis?.audio?.score ?? ""],
+        ["audio", "meanVolumeDb", video.mediaAnalysis?.audio?.meanVolumeDb ?? ""],
+        ["audio", "maxVolumeDb", video.mediaAnalysis?.audio?.maxVolumeDb ?? ""],
+        ["audio", "silenceRatio", video.mediaAnalysis?.audio?.silenceRatio ?? ""],
+        ["audio", "silenceEvents", video.mediaAnalysis?.audio?.silenceEvents ?? ""],
+        ["audio", "warnings", (video.mediaAnalysis?.audio?.warnings || []).join("; ")],
+        ["video", "available", Boolean(video.mediaAnalysis?.video?.available)],
+        ["video", "score", video.mediaAnalysis?.video?.score ?? ""],
+        ["video", "readabilityScore", video.mediaAnalysis?.video?.readabilityScore ?? ""],
+        ["video", "averageBrightness", video.mediaAnalysis?.video?.averageBrightness ?? ""],
+        ["video", "averageContrast", video.mediaAnalysis?.video?.averageContrast ?? ""],
+        ["video", "frameCount", video.mediaAnalysis?.video?.frameCount ?? ""],
+        ["video", "warnings", (video.mediaAnalysis?.video?.warnings || []).join("; ")],
+        ["ocr", "available", Boolean(video.mediaAnalysis?.ocr?.available)],
+        ["ocr", "frames", video.mediaAnalysis?.ocr?.frames?.length || 0],
+        ["ocr", "text", video.mediaAnalysis?.ocr?.text || ""],
+        ["ocr", "warnings", (video.mediaAnalysis?.ocr?.warnings || []).join("; ")]
+      ]
+    },
+    {
+      name: "Риски",
+      rows: [
+        ["Уровень", "Риск", "Обоснование"],
+        ...risks.map(([level, title, body]) => [level, title, body])
+      ]
+    },
+    {
+      name: "Аудитория",
+      rows: [
+        ["Аудитория", "Оценка 0-10", "Обоснование"],
+        ...audienceRows.map((row) => [row.label, Number(row.score.toFixed(2)), row.reason])
+      ]
+    },
+    {
+      name: "Таймкоды аудит",
+      rows: [
+        ["Уровень", "Сегмент", "Проблема", "Описание"],
+        ...(timecodeIssues.length ? timecodeIssues.map((issue) => [issue.level, issue.index + 1, issue.title, issue.body]) : [["ok", "", "Таймкоды согласованы", "Формат, порядок и длительность выглядят корректно."]])
+      ]
+    },
+    {
+      name: "Исходные тексты",
+      rows: [
+        ["Поле", "Часть", "Текст"],
+        ...chunkTextRows("Транскрипт", video.transcript),
+        ...chunkTextRows("Описание и OCR", video.ocr),
+        ...chunkTextRows("Визуальные наблюдения", visualObservationLines(video.visualObservations || []).join("\n")),
+        ...chunkTextRows("Медиа-анализ", mediaAnalysisLines(video.mediaAnalysis).join("\n"))
+      ]
+    },
+    {
+      name: "Бенчмарки",
+      rows: [
+        ["#", "Источник", "Название", "URL", "Просмотры", "Балл/класс"],
+        ...popularLeaders.map((leader, index) => [
+          index + 1,
+          state.popularBenchmark?.searchScope || "YouTube benchmark",
+          leader.title || leader.searchTitle || "",
+          leader.url || "",
+          leader.views || "",
+          leader.total ? `${leader.grade || ""} ${leader.total}`.trim() : ""
+        ])
+      ]
+    }
+  ];
+
+  downloadExcelWorkbook(`${safeFileName(video.title)}-green-a-rating.xls`, sheets);
+  setFetchStatus("Excel-файл с пакетом для рейтингования скачан.", "ok");
+}
+
 function currentAnalysis() {
   const { scores, flags } = calculateScores();
-  const total = flags.educationalFit.exclude ? 0 : weightedTotal(scores);
+  const total = flags.educationalFit.exclude ? null : weightedTotal(scores);
   const draft = currentVideoPayload();
+  const topicInfo = draft.topicClassification || classifyTopic(draft);
   return {
     ...draft,
     scores,
     total,
     grade: flags.educationalFit.exclude ? "N/A" : gradeFor(total),
     educationalFit: flags.educationalFit,
-    topic: draft.topic || inferTopic(draft),
-    benchmarkTopic: benchmarkTopic(draft)
+    topic: topicInfo.label !== "Без темы" ? topicInfo.label : draft.topic,
+    topicClassification: topicInfo,
+    benchmarkTopic: topicInfo.benchmark
   };
 }
 
@@ -788,13 +1494,13 @@ function renderBenchmarks(current) {
     els.benchmarkList.innerHTML = `<div class="empty-state">Бенчмарки не подбираются: текущий ролик не классифицирован как обучающий.</div>`;
     return;
   }
-  const currentTopic = (current.topic || "Без темы").toLowerCase();
+  const currentTopic = topicKey(current);
   const currentUrl = current.url.trim();
   const candidates = state.videos
     .map(analyzeVideo)
     .filter((video) => !video.educationalFit?.exclude)
     .filter((video) => {
-      const sameTopic = (video.topic || inferTopic(video)).toLowerCase() === currentTopic;
+      const sameTopic = topicKey(video) === currentTopic;
       const sameVideo = currentUrl && video.url.trim() === currentUrl;
       return sameTopic && !sameVideo && video.total > current.total;
     })
@@ -823,7 +1529,7 @@ function renderBenchmarks(current) {
         <strong>${escapeHtml(video.title)}</strong>
         <b>${video.grade} ${video.total}</b>
       </span>
-      <span class="topic-chip">${escapeHtml(video.topic || inferTopic(video))}</span>
+        <span class="topic-chip">${escapeHtml(topicLabel(video))}</span>
       <span class="benchmark-delta">+${video.total - current.total} к текущему ролику</span>
       <span class="benchmark-gaps">
         ${gaps.length ? gaps.map((gap) => `<i>${escapeHtml(gap.label)} +${gap.delta.toFixed(1)}</i>`).join("") : "<i>Преимущество распределено равномерно</i>"}
@@ -838,7 +1544,8 @@ function escapeHtml(value) {
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;");
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
 }
 
 function renderDashboard() {
@@ -861,7 +1568,7 @@ function renderDashboard() {
 function groupByTopic(ranked) {
   const groups = new Map();
   ranked.forEach((video) => {
-    const topic = video.topic || inferTopic(video);
+    const topic = topicLabel(video);
     if (!groups.has(topic)) groups.set(topic, []);
     groups.get(topic).push(video);
   });
@@ -892,7 +1599,7 @@ function renderRanking(ranked) {
       <span class="video-meta">
         <strong>${escapeHtml(video.title)}</strong>
         <span>${escapeHtml(video.url || "URL не указан")}</span>
-        <em class="topic-chip">${escapeHtml(video.topic || inferTopic(video))}</em>
+        <em class="topic-chip">${escapeHtml(topicLabel(video))}</em>
       </span>
       <span class="ranking-stat"><span>Балл</span><strong>${video.total}</strong></span>
       <span class="ranking-stat"><span>Класс</span><strong>${video.grade}</strong></span>
@@ -1061,7 +1768,7 @@ function loadVideo(videoId) {
   state.hasLoadedVideo = true;
   els.videoUrl.value = video.url;
   els.videoTitle.value = video.title;
-  els.videoTopic.value = video.topic || inferTopic(video);
+  els.videoTopic.value = video.topic || topicLabel(video);
   els.transcript.value = video.transcript;
   els.ocrText.value = video.ocr;
   els.audioQuality.value = video.audio;
@@ -1069,6 +1776,10 @@ function loadVideo(videoId) {
   els.slideReadability.value = video.slides;
   els.speechPace.value = video.pace;
   state.segments = video.segments.map((segment) => ({ ...segment }));
+  state.visualObservations = Array.isArray(video.visualObservations)
+    ? video.visualObservations.map((item) => ({ ...item }))
+    : [];
+  state.mediaAnalysis = video.mediaAnalysis ? structuredClone(video.mediaAnalysis) : null;
   renderSegments();
   syncRangeLabels();
   update();
@@ -1174,19 +1885,36 @@ function update() {
   }
   const { scores, flags, data } = calculateScores();
   const isExcluded = flags.educationalFit.exclude;
-  const total = isExcluded ? 0 : weightedTotal(scores);
+  const total = isExcluded ? null : weightedTotal(scores);
   const grade = isExcluded ? "N/A" : gradeFor(total);
-  els.score.textContent = total;
-  els.headerScore.textContent = total;
+  els.score.textContent = total ?? NOT_AVAILABLE_LABEL;
+  els.headerScore.textContent = total ?? "N/A";
   els.grade.textContent = grade;
   els.headerGrade.textContent = grade;
   els.ratingSummary.textContent = !isExcluded
     ? [summaryFor(total), flags.educationalFit.weak ? `Обучающий формат выражен слабо: ${flags.educationalFit.score}/10.` : "", ratingCapNote(scores)].filter(Boolean).join(" ")
-    : "Ролик исключен из образовательного рейтинга: по описанию и содержанию это скорее познавательный/медийный материал без достаточной учебной механики.";
+    : `Ролик исключен из образовательного рейтинга и помечен как ${NOT_AVAILABLE_LABEL}: по описанию и содержанию это скорее познавательный/медийный материал без достаточной учебной механики.`;
+
+  els.transcriptView.textContent = data.transcript.trim() || "Транскрипт отсутствует.";
+  const visualLines = visualObservationLines(state.visualObservations).join("\n");
+  els.visualView.textContent = visualLines || "Визуальные наблюдения отсутствуют.";
+  els.ocrView.textContent = data.ocr.trim() || "Текст на слайдах / OCR отсутствует.";
+
   renderScales(scores);
   renderAudience(scores, flags, data);
-  renderBenchmarks({ ...currentVideoPayload(), scores, total, grade, topic: els.videoTopic.value.trim() || inferTopic(currentVideoPayload()) });
-  renderPopularBenchmark({ ...currentVideoPayload(), scores, total, grade, topic: els.videoTopic.value.trim() || inferTopic(currentVideoPayload()) });
+  const currentPayload = currentVideoPayload();
+  const topicInfo = currentPayload.topicClassification || classifyTopic(currentPayload);
+  const currentWithScores = {
+    ...currentPayload,
+    scores,
+    total,
+    grade,
+    topic: topicInfo.label !== "Без темы" ? topicInfo.label : currentPayload.topic,
+    topicClassification: topicInfo,
+    benchmarkTopic: topicInfo.benchmark
+  };
+  renderBenchmarks(currentWithScores);
+  renderPopularBenchmark(currentWithScores);
   renderRisks(buildRisks(scores, flags, data));
   renderEvidence(scores, flags);
   drawRadar(scores);
@@ -1213,6 +1941,8 @@ document.querySelector("#loadDemo").addEventListener("click", () => {
   els.transcript.value = demo.transcript;
   els.ocrText.value = demo.ocr;
   state.segments = demo.segments.map((segment) => ({ ...segment }));
+  state.visualObservations = [];
+  state.mediaAnalysis = null;
   state.selectedVideoId = null;
   state.hasLoadedVideo = true;
   renderSegments();
@@ -1223,6 +1953,8 @@ els.fetchYouTube.addEventListener("click", fetchYouTubeData);
 
 els.saveVideo.addEventListener("click", saveCurrentVideo);
 
+els.exportRatingData.addEventListener("click", exportRatingData);
+
 els.loadDashboardDemo.addEventListener("click", () => {
   state.videos = dashboardDemo.map((video) => ({
     id: crypto.randomUUID(),
@@ -1231,7 +1963,9 @@ els.loadDashboardDemo.addEventListener("click", () => {
     slides: 7,
     pace: 8,
     ...video,
-    segments: video.segments.map((segment) => ({ ...segment }))
+    segments: video.segments.map((segment) => ({ ...segment })),
+    visualObservations: Array.isArray(video.visualObservations) ? video.visualObservations.map((item) => ({ ...item })) : [],
+    mediaAnalysis: video.mediaAnalysis ? structuredClone(video.mediaAnalysis) : null
   }));
   loadVideo(state.videos[0].id);
   renderDashboard();
@@ -1277,6 +2011,8 @@ els.segments.addEventListener("click", (event) => {
       state.hasLoadedVideo = false;
       state.popularBenchmark = null;
       state.popularStatus = "idle";
+      state.visualObservations = [];
+      state.mediaAnalysis = null;
     }
     syncRangeLabels();
     update();

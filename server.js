@@ -1,5 +1,6 @@
 const http = require("node:http");
 const fs = require("node:fs/promises");
+const os = require("node:os");
 const path = require("node:path");
 const { execFile } = require("node:child_process");
 const { URL } = require("node:url");
@@ -7,6 +8,7 @@ const { URL } = require("node:url");
 const root = __dirname;
 const port = Number(process.env.PORT || 8787);
 const host = process.env.HOST || "0.0.0.0";
+const youtubeApiKey = String(process.env.YOUTUBE_API_KEY || "").trim();
 
 const mime = {
   ".html": "text/html; charset=utf-8",
@@ -154,7 +156,7 @@ function queryDomain(query) {
   if (/python|javascript|typescript|react|node|программ|кодинг|разработ/.test(value)) return "programming";
   if (/sql|postgres|mysql|баз[аы] данных|database/.test(value)) return "database";
   if (/ux|ui|дизайн|интерфейс|figma|product design/.test(value)) return "ux";
-  if (/нейро|нейросет|ai|machine learning|искусственн|модель/.test(value)) return "ai";
+  if (/нейро|нейросет|\bai\b|\bml\b|machine learning|искусственн|llm|chatgpt/.test(value)) return "ai";
   if (/англий|english|ielts|toefl|grammar|vocabulary|немец|deutsch|испан|француз|япон|китай|иностранн.*язык/.test(value)) return "language";
   return "general";
 }
@@ -191,13 +193,174 @@ function matchesDomain(video, domain) {
       forbidden: /англий|english|иностранн.*язык|трейдинг|trading|sql|python|нейро|нейросет|физик|математ/
     },
     ai: {
-      required: /нейро|нейросет|ai|machine learning|искусственн|модель|chatgpt|llm/,
+      required: /нейро|нейросет|\bai\b|\bml\b|machine learning|искусственн|chatgpt|llm/,
       forbidden: /англий|english|иностранн.*язык|трейдинг|trading|ux|figma|физик|математ/
     }
   };
   const rule = rules[domain];
   if (!rule) return true;
   return rule.required.test(value) && !rule.forbidden.test(value);
+}
+
+const topicClassificationRules = [
+  {
+    id: "physics",
+    label: "Физика",
+    benchmark: "обучение физике",
+    include: [
+      [/физик|physics|механик|электродинамик|термодинамик|оптик|квант|ньютон|электричеств|магнетизм|кинематик|динамик/i, "физика"],
+      [/егэ\s*(по\s*)?физ|огэ\s*(по\s*)?физ|задач[аи]\s+по\s+физ/i, "экзамен/задачи по физике"]
+    ],
+    exclude: [/англий|english|ielts|toefl|язык программирован|python|javascript|typescript|нейросет|machine learning|трейдинг|trading|ux|figma/i]
+  },
+  {
+    id: "math",
+    label: "Математика",
+    benchmark: "обучение математике",
+    include: [
+      [/математ|math|алгебр|геометр|calculus|тригонометр|производн|интеграл|логарифм|уравнен|теорем|дроб[ьи]/i, "математика"],
+      [/егэ\s*(по\s*)?мат|огэ\s*(по\s*)?мат|задач[аи]\s+по\s+мат/i, "экзамен/задачи по математике"]
+    ],
+    exclude: [/англий|english|ielts|toefl|python|javascript|typescript|нейросет|machine learning|трейдинг|trading|ux|figma/i]
+  },
+  {
+    id: "language",
+    label: "Иностранные языки",
+    benchmark: "обучение иностранному языку",
+    include: [
+      [/английск|english|ielts|toefl|grammar|vocabulary|speaking|listening|pronunciation|лексик[аи]|грамматик/i, "английский/языковое обучение"],
+      [/немецк|deutsch|испанск|spanish|французск|french|японск|китайск|иностранн[а-я\s]+язык/i, "иностранный язык"]
+    ],
+    exclude: [/язык программирован|programming language|python|javascript|typescript|react|node|sql|кодинг|код\b|программ|разработк|нейро|нейросет|machine learning|трейдинг|trading|бирж|крипт|физик|математ/i]
+  },
+  {
+    id: "trading",
+    label: "Трейдинг и инвестиции",
+    benchmark: "обучение трейдингу",
+    include: [[/трейдинг|trading|бирж|крипт|криптовалют|инвест|акци[ия]|forex|форекс|фьючерс|скальпинг|теханализ|техническ[а-я\s]+анализ/i, "трейдинг/инвестиции"]],
+    exclude: [/англий|english|язык программирован|python|javascript|нейросет|machine learning|физик|математ|ux|figma/i]
+  },
+  {
+    id: "database",
+    label: "Базы данных",
+    benchmark: "обучение SQL",
+    include: [[/\bsql\b|postgres|mysql|sqlite|баз[аы]\s+данных|database|join|индекс[ыа]?|таблиц[аы]\s+sql/i, "SQL/базы данных"]],
+    exclude: [/англий|english|иностранн[а-я\s]+язык|трейдинг|нейросет|физик|математ|ux|figma/i]
+  },
+  {
+    id: "programming",
+    label: "Программирование",
+    benchmark: "обучение программированию",
+    include: [
+      [/\bpython\b|\bjavascript\b|\btypescript\b|\breact\b|\bnode\.?js\b|\bhtml\b|\bcss\b|frontend|backend|программирован|кодинг|разработк|алгоритм[ыа]?\s+код|\bide\b|\bgit\b/i, "программирование"],
+      [/язык программирован|programming language/i, "язык программирования"]
+    ],
+    exclude: [/английск|english|ielts|toefl|grammar|vocabulary|немецк|deutsch|испанск|французск|иностранн[а-я\s]+язык|трейдинг|физик|математ|ux|figma/i]
+  },
+  {
+    id: "ux",
+    label: "UX и продуктовый дизайн",
+    benchmark: "обучение UX дизайну",
+    include: [[/\bux\b|\bui\b|figma|дизайн интерфейс|продуктов[а-я\s]+дизайн|user research|исследован[а-я\s]+пользовател|прототип|юзабилити/i, "UX/UI дизайн"]],
+    exclude: [/англий|english|sql|python|javascript|нейросет|machine learning|трейдинг|физик|математ/i]
+  },
+  {
+    id: "ai",
+    label: "AI и машинное обучение",
+    benchmark: "обучение нейросетям",
+    include: [[/\bai\b|\bml\b|machine learning|deep learning|llm|chatgpt|нейро|нейросет|искусственн[а-я\s]+интеллект|машинн[а-я\s]+обучен|больш[а-я\s]+языков[а-я\s]+модел/i, "AI/машинное обучение"]],
+    exclude: [/английск|english|ielts|toefl|иностранн[а-я\s]+язык|трейдинг|trading|ux|figma|физик|математ/i]
+  },
+  {
+    id: "marketing",
+    label: "Маркетинг и продажи",
+    benchmark: "обучение маркетингу",
+    include: [[/маркетинг|продаж[аи]|воронк[аи]|таргет|smm|реклам[аи]|лидогенерац|оффер|копирайтинг/i, "маркетинг/продажи"]],
+    exclude: [/физик|математ|англий|english|python|javascript|нейросет|ux|figma|трейдинг/i]
+  },
+  {
+    id: "learning-methodology",
+    label: "Методология обучения",
+    benchmark: "методология обучения",
+    include: [[/методолог[а-я\s]+обучен|педагогик|дидактик|instructional design|learning design|когнитивн[а-я\s]+нагрузк|образовательн[а-я\s]+дизайн|green argus/i, "методология обучения"]],
+    exclude: [/математ|физик|англий|english|python|javascript|sql|трейдинг|ux|figma|нейросет/i]
+  }
+];
+
+function normalizeTopicText(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/ё/g, "е")
+    .replace(/[^\p{L}\p{N}\s.+#-]/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function topicSpecificBenchmark(rule, text) {
+  if (rule.id === "language") {
+    if (/английск|english|ielts|toefl|grammar|vocabulary|speaking|listening|pronunciation/i.test(text)) return "обучение английскому языку";
+    if (/немецк|deutsch/i.test(text)) return "обучение немецкому языку";
+    if (/испанск|spanish/i.test(text)) return "обучение испанскому языку";
+    if (/французск|french/i.test(text)) return "обучение французскому языку";
+    if (/японск/i.test(text)) return "обучение японскому языку";
+    if (/китайск/i.test(text)) return "обучение китайскому языку";
+  }
+  if (rule.id === "programming") {
+    if (/python/i.test(text)) return "обучение Python";
+    if (/javascript|typescript|react|node\.?js/i.test(text)) return "обучение JavaScript";
+  }
+  return rule.benchmark;
+}
+
+function classifyVideoTopic(input = {}) {
+  const sources = [
+    { label: "название", weight: 5, text: normalizeTopicText(input.title) },
+    { label: "описание/главы", weight: 2.6, text: normalizeTopicText(input.description) },
+    { label: "OCR/экран", weight: 2.2, text: normalizeTopicText(input.ocr) },
+    { label: "субтитры", weight: 1.4, text: normalizeTopicText(input.transcript) }
+  ];
+  const scored = topicClassificationRules.map((rule) => {
+    let score = 0;
+    const evidence = [];
+    for (const source of sources) {
+      if (!source.text) continue;
+      if (rule.exclude.some((pattern) => pattern.test(source.text))) score -= source.weight * 1.25;
+      for (const [pattern, label] of rule.include) {
+        if (pattern.test(source.text)) {
+          score += source.weight;
+          evidence.push(`${source.label}: ${label}`);
+          break;
+        }
+      }
+    }
+    return { ...rule, score, evidence: [...new Set(evidence)] };
+  }).sort((a, b) => b.score - a.score);
+
+  const best = scored[0] || { score: 0, evidence: [] };
+  const second = scored[1] || { score: 0 };
+  const margin = best.score - Math.max(0, second.score);
+  if (best.score < 4.5 || (best.score < 7 && margin < 1.6)) {
+    return {
+      id: "unknown",
+      label: "Без темы",
+      benchmark: "",
+      score: Number(Math.max(0, best.score).toFixed(1)),
+      confidence: "низкая",
+      evidence: best.evidence.slice(0, 4),
+      alternatives: scored.slice(0, 3).map((item) => ({ id: item.id, label: item.label, score: Number(item.score.toFixed(1)) }))
+    };
+  }
+
+  const allText = sources.map((source) => source.text).join(" ");
+  return {
+    id: best.id,
+    label: best.label,
+    benchmark: topicSpecificBenchmark(best, allText),
+    score: Number(best.score.toFixed(1)),
+    confidence: best.score >= 9 && margin >= 3 ? "высокая" : "средняя",
+    evidence: best.evidence.slice(0, 6),
+    alternatives: scored.slice(1, 4).map((item) => ({ id: item.id, label: item.label, score: Number(item.score.toFixed(1)) }))
+  };
 }
 
 function isRelevantEducationalResult(video, query) {
@@ -368,6 +531,84 @@ function chooseStreamUrl(streamingData = {}) {
   return direct[0]?.url || "";
 }
 
+function chooseAudioStreamUrl(streamingData = {}) {
+  const formats = [...(streamingData.formats || []), ...(streamingData.adaptiveFormats || [])];
+  const direct = formats
+    .filter((format) => format.url && /^audio\//.test(format.mimeType || ""))
+    .sort((a, b) => Number(b.bitrate || 0) - Number(a.bitrate || 0));
+  return direct[0]?.url || "";
+}
+
+function pickYtDlpFormat(formats = [], kind) {
+  const list = formats.filter((format) => format.url);
+  if (kind === "audio") {
+    return list
+      .filter((format) => format.acodec && format.acodec !== "none")
+      .filter((format) => !format.vcodec || format.vcodec === "none")
+      .sort((a, b) => Number(b.abr || b.tbr || 0) - Number(a.abr || a.tbr || 0))[0] || null;
+  }
+  return list
+    .filter((format) => format.vcodec && format.vcodec !== "none")
+    .sort((a, b) => {
+      const aMp4 = formatExtScore(a);
+      const bMp4 = formatExtScore(b);
+      if (aMp4 !== bMp4) return bMp4 - aMp4;
+      const aHeight = Number(a.height || 0);
+      const bHeight = Number(b.height || 0);
+      const aTarget = aHeight > 720 ? 720 - (aHeight - 720) : aHeight;
+      const bTarget = bHeight > 720 ? 720 - (bHeight - 720) : bHeight;
+      return bTarget - aTarget;
+    })[0] || null;
+}
+
+function formatExtScore(format) {
+  const value = `${format.ext || ""} ${format.protocol || ""} ${format.format_note || ""}`.toLowerCase();
+  if (/mp4|https/.test(value)) return 2;
+  if (/webm/.test(value)) return 1;
+  return 0;
+}
+
+async function resolveYtDlpStreams(videoUrl) {
+  const attempts = [
+    { command: "yt-dlp", args: ["-J", "--no-playlist", "--extractor-args", "youtube:player_client=android", videoUrl], label: "yt-dlp android" },
+    { command: "python3", args: ["-m", "yt_dlp", "-J", "--no-playlist", "--extractor-args", "youtube:player_client=android", videoUrl], label: "python3 -m yt_dlp android" },
+    { command: "yt-dlp", args: ["-J", "--no-playlist", videoUrl], label: "yt-dlp" },
+    { command: "python3", args: ["-m", "yt_dlp", "-J", "--no-playlist", videoUrl], label: "python3 -m yt_dlp" }
+  ];
+  const warnings = [];
+  for (const attempt of attempts) {
+    try {
+      const { stdout } = await execFilePromise(attempt.command, attempt.args, {
+        timeout: 60000,
+        maxBuffer: 1024 * 1024 * 24
+      });
+      const data = JSON.parse(stdout);
+      const audioFormat = pickYtDlpFormat(data.formats || [], "audio");
+      const videoFormat = pickYtDlpFormat(data.formats || [], "video");
+      return {
+        available: true,
+        source: attempt.label,
+        audioUrl: audioFormat?.url || (videoFormat?.acodec && videoFormat.acodec !== "none" ? videoFormat.url : ""),
+        videoUrl: videoFormat?.url || "",
+        audioHeaders: audioFormat?.http_headers || videoFormat?.http_headers || data.http_headers || {},
+        videoHeaders: videoFormat?.http_headers || data.http_headers || {},
+        warnings
+      };
+    } catch (error) {
+      warnings.push(`${attempt.label}: ${error.message}`);
+    }
+  }
+  return {
+    available: false,
+    source: "",
+    audioUrl: "",
+    videoUrl: "",
+    audioHeaders: {},
+    videoHeaders: {},
+    warnings: ["yt-dlp недоступен; прямые аудио/видео потоки не удалось получить.", ...warnings]
+  };
+}
+
 function execFilePromise(file, args, options = {}) {
   return new Promise((resolve, reject) => {
     execFile(file, args, { timeout: 45000, maxBuffer: 1024 * 1024 * 8, ...options }, (error, stdout, stderr) => {
@@ -382,14 +623,308 @@ function execFilePromise(file, args, options = {}) {
   });
 }
 
-async function detectSceneSegments(streamUrl, duration) {
+function ffmpegInputArgs(url, headers = {}) {
+  const merged = {
+    "User-Agent": "Mozilla/5.0 GreenA/1.0",
+    Referer: "https://www.youtube.com/",
+    ...headers
+  };
+  const headerText = Object.entries(merged)
+    .filter(([, value]) => value)
+    .map(([key, value]) => `${key}: ${value}`)
+    .join("\r\n");
+  return [
+    "-user_agent", String(merged["User-Agent"] || "Mozilla/5.0 GreenA/1.0"),
+    "-headers", `${headerText}\r\n`,
+    "-i", url
+  ];
+}
+
+async function hasCommand(command) {
+  for (const args of [["-version"], ["--version"]]) {
+    try {
+      await execFilePromise(command, args, { timeout: 5000, maxBuffer: 1024 * 128 });
+      return true;
+    } catch {
+      // Try the next common version flag.
+    }
+  }
+  return false;
+}
+
+function parseTimeRangeSeconds(value) {
+  const parts = String(value || "").replace(/[–—]/g, "-").split("-").map((part) => part.trim());
+  if (parts.length !== 2) return null;
+  const start = parseTimestamp(parts[0]);
+  const end = parseTimestamp(parts[1]);
+  if (start === null || end === null || end <= start) return null;
+  return { start, end, duration: end - start, midpoint: start + ((end - start) / 2) };
+}
+
+function average(values) {
+  const clean = values.filter((value) => Number.isFinite(value));
+  return clean.length ? clean.reduce((sum, value) => sum + value, 0) / clean.length : 0;
+}
+
+function scoreAudioLoudness(meanVolume) {
+  if (!Number.isFinite(meanVolume)) return 5;
+  if (meanVolume < -48) return 1.5;
+  if (meanVolume < -38) return 3.5;
+  if (meanVolume < -30) return 5.5;
+  if (meanVolume > -6) return 4.5;
+  if (meanVolume > -10) return 6.2;
+  return 8.5;
+}
+
+async function analyzeAudioStream(audioUrl, duration, cues = [], headers = {}) {
+  if (!audioUrl) {
+    return {
+      available: false,
+      score: 5,
+      speechScore: cues.length ? estimatePace(cues) : 5,
+      warnings: ["Аудиопоток YouTube не найден в доступных данных."]
+    };
+  }
+  if (!(await hasCommand("ffmpeg"))) {
+    return {
+      available: false,
+      score: cues.length ? 7 : 5,
+      speechScore: cues.length ? estimatePace(cues) : 5,
+      warnings: ["ffmpeg не установлен на сервере, аудио-метрики недоступны."]
+    };
+  }
+  const analysisLimit = Math.min(Math.max(Number(duration || 0), 60), 300);
+  const args = [
+    "-hide_banner",
+    "-nostdin",
+    "-t", String(analysisLimit),
+    ...ffmpegInputArgs(audioUrl, headers),
+    "-af", "silencedetect=noise=-35dB:d=0.8,volumedetect",
+    "-f", "null",
+    "-"
+  ];
+  try {
+    const { stderr } = await execFilePromise("ffmpeg", args, { timeout: 55000, maxBuffer: 1024 * 1024 * 8 });
+    const meanVolume = Number((stderr.match(/mean_volume:\s*(-?[0-9.]+)\s*dB/) || [])[1]);
+    const maxVolume = Number((stderr.match(/max_volume:\s*(-?[0-9.]+)\s*dB/) || [])[1]);
+    const starts = [...stderr.matchAll(/silence_start:\s*([0-9.]+)/g)].map((match) => Number(match[1]));
+    const ends = [...stderr.matchAll(/silence_end:\s*([0-9.]+)\s*\|\s*silence_duration:\s*([0-9.]+)/g)].map((match) => ({
+      end: Number(match[1]),
+      duration: Number(match[2])
+    }));
+    const silenceSeconds = ends.reduce((sum, item) => sum + (Number.isFinite(item.duration) ? item.duration : 0), 0);
+    const silenceRatio = Math.max(0, Math.min(1, silenceSeconds / analysisLimit));
+    const loudnessScore = scoreAudioLoudness(meanVolume);
+    const silenceScore = silenceRatio > 0.55 ? 2.5 : silenceRatio > 0.35 ? 5 : silenceRatio > 0.18 ? 7 : 8.5;
+    const speechScore = cues.length ? estimatePace(cues) : silenceScore;
+    const score = Math.max(0, Math.min(10, (loudnessScore * 0.55) + (silenceScore * 0.25) + (speechScore * 0.20)));
+    const warnings = [];
+    if (!Number.isFinite(meanVolume)) warnings.push("Не удалось прочитать среднюю громкость.");
+    if (silenceRatio > 0.35) warnings.push("Много тишины или длинных пауз в анализируемом фрагменте.");
+    if (Number.isFinite(maxVolume) && maxVolume > -1) warnings.push("Есть риск перегруза или клиппинга звука.");
+    return {
+      available: true,
+      analyzedSeconds: analysisLimit,
+      meanVolumeDb: Number.isFinite(meanVolume) ? Number(meanVolume.toFixed(1)) : null,
+      maxVolumeDb: Number.isFinite(maxVolume) ? Number(maxVolume.toFixed(1)) : null,
+      silenceSeconds: Number(silenceSeconds.toFixed(1)),
+      silenceRatio: Number(silenceRatio.toFixed(2)),
+      silenceEvents: starts.length,
+      score: Number(score.toFixed(1)),
+      speechScore,
+      warnings
+    };
+  } catch (error) {
+    return {
+      available: false,
+      score: cues.length ? 7 : 5,
+      speechScore: cues.length ? estimatePace(cues) : 5,
+      warnings: [`Не удалось выполнить аудио-анализ: ${error.message}`]
+    };
+  }
+}
+
+function scoreBrightness(value) {
+  if (!Number.isFinite(value)) return 5;
+  if (value < 35 || value > 225) return 3.5;
+  if (value < 55 || value > 205) return 5.5;
+  return 8;
+}
+
+function scoreContrast(value) {
+  if (!Number.isFinite(value)) return 5;
+  if (value < 18) return 3.5;
+  if (value < 28) return 5.5;
+  return 8;
+}
+
+async function analyzeVideoStream(videoUrl, duration, headers = {}) {
+  if (!videoUrl) {
+    return {
+      available: false,
+      score: 5,
+      readabilityScore: 5,
+      warnings: ["Видеопоток YouTube не найден в доступных данных."]
+    };
+  }
+  if (!(await hasCommand("ffmpeg"))) {
+    return {
+      available: false,
+      score: 5,
+      readabilityScore: 5,
+      warnings: ["ffmpeg не установлен на сервере, визуальные метрики недоступны."]
+    };
+  }
+  const analysisLimit = Math.min(Math.max(Number(duration || 0), 60), 240);
+  const args = [
+    "-hide_banner",
+    "-nostdin",
+    "-t", String(analysisLimit),
+    ...ffmpegInputArgs(videoUrl, headers),
+    "-vf", "fps=1/20,scale=320:-1,showinfo",
+    "-an",
+    "-f", "null",
+    "-"
+  ];
+  try {
+    const { stderr } = await execFilePromise("ffmpeg", args, { timeout: 55000, maxBuffer: 1024 * 1024 * 8 });
+    const frameMatches = [...stderr.matchAll(/pts_time:([0-9.]+).*?mean:\[([0-9.]+)\s+([0-9.]+)\s+([0-9.]+)\].*?stdev:\[([0-9.]+)\s+([0-9.]+)\s+([0-9.]+)\]/g)];
+    const frames = frameMatches.map((match) => ({
+      time: secondsToTime(Number(match[1])),
+      brightness: Number(match[2]),
+      chromaU: Number(match[3]),
+      chromaV: Number(match[4]),
+      contrast: Number(match[5])
+    }));
+    const brightness = average(frames.map((frame) => frame.brightness));
+    const contrast = average(frames.map((frame) => frame.contrast));
+    const brightnessScore = scoreBrightness(brightness);
+    const contrastScore = scoreContrast(contrast);
+    const readabilityScore = Math.max(0, Math.min(10, (brightnessScore * 0.45) + (contrastScore * 0.55)));
+    const score = readabilityScore;
+    const warnings = [];
+    if (!frames.length) warnings.push("Кадры не удалось измерить через showinfo.");
+    if (brightnessScore < 6) warnings.push("Средняя яркость кадров может ухудшать читаемость.");
+    if (contrastScore < 6) warnings.push("Низкий контраст может ухудшать читаемость текста и деталей.");
+    return {
+      available: frames.length > 0,
+      analyzedSeconds: analysisLimit,
+      frameCount: frames.length,
+      averageBrightness: Number(brightness.toFixed(1)),
+      averageContrast: Number(contrast.toFixed(1)),
+      readabilityScore: Number(readabilityScore.toFixed(1)),
+      score: Number(score.toFixed(1)),
+      frames: frames.slice(0, 12).map((frame) => ({
+        ...frame,
+        brightness: Number(frame.brightness.toFixed(1)),
+        contrast: Number(frame.contrast.toFixed(1))
+      })),
+      warnings
+    };
+  } catch (error) {
+    return {
+      available: false,
+      score: 5,
+      readabilityScore: 5,
+      warnings: [`Не удалось выполнить видео-анализ: ${error.message}`]
+    };
+  }
+}
+
+async function extractFrameOcr(videoUrl, segments, duration, headers = {}, pageUrl = "") {
+  if (!videoUrl && !pageUrl) {
+    return { available: false, frames: [], text: "", warnings: ["Видеопоток для OCR недоступен."] };
+  }
+  if (!(await hasCommand("ffmpeg"))) {
+    return { available: false, frames: [], text: "", warnings: ["ffmpeg не установлен, извлечение кадров для OCR недоступно."] };
+  }
+  const hasTesseract = await hasCommand("tesseract");
+  if (!hasTesseract) {
+    return { available: false, frames: [], text: "", warnings: ["tesseract не установлен, OCR текста на кадрах пропущен."] };
+  }
+  const ranges = (segments || [])
+    .map((segment) => parseTimeRangeSeconds(segment.time))
+    .filter(Boolean);
+  const points = (ranges.length ? ranges : [{ midpoint: Math.min(30, Number(duration || 30)) }])
+    .slice(0, 6)
+    .map((range) => Math.max(1, Math.min(Number(duration || range.midpoint || 1), range.midpoint || 1)));
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "green-a-ocr-"));
+  const frames = [];
+  try {
+    for (let index = 0; index < points.length; index += 1) {
+      const point = points[index];
+      const framePath = path.join(tempDir, `frame-${index + 1}.jpg`);
+      let frameSource = "ffmpeg-stream";
+      try {
+        if (!videoUrl) throw new Error("прямой видеопоток недоступен");
+        await execFilePromise("ffmpeg", [
+          "-hide_banner",
+          "-nostdin",
+          "-ss", String(point),
+          ...ffmpegInputArgs(videoUrl, headers),
+          "-frames:v", "1",
+          "-vf", "scale=960:-1",
+          "-q:v", "3",
+          "-y",
+          framePath
+        ], { timeout: 25000, maxBuffer: 1024 * 1024 * 4 });
+      } catch {
+        const fallback = await extractFrameViaYtDlp(pageUrl, point, framePath);
+        frameSource = fallback.source;
+      }
+      const stdout = await runTesseract(framePath);
+      const text = cleanSegmentText(stdout).slice(0, 600);
+      frames.push({
+        time: secondsToTime(point),
+        text,
+        hasText: text.length > 12,
+        source: frameSource
+      });
+    }
+  } catch (error) {
+    frames.push({
+      time: "",
+      text: "",
+      hasText: false,
+      source: "frame-ocr",
+      warning: `OCR остановлен: ${error.message}`
+    });
+  } finally {
+    await fs.rm(tempDir, { recursive: true, force: true });
+  }
+  const text = frames.map((frame) => frame.text).filter(Boolean).join("\n");
+  return {
+    available: frames.some((frame) => frame.hasText),
+    frames,
+    text,
+    warnings: frames.some((frame) => frame.warning) ? frames.map((frame) => frame.warning).filter(Boolean) : []
+  };
+}
+
+async function analyzeMediaStreams({ audioUrl, videoUrl, pageUrl, duration, cues, segments, mode, audioHeaders = {}, videoHeaders = {} }) {
+  if (mode !== "stream") {
+    return {
+      audio: { available: false, score: cues.length ? estimatePace(cues) : 5, warnings: ["Медиа-анализ отключен в быстром режиме."] },
+      video: { available: false, score: 5, readabilityScore: 5, warnings: ["Медиа-анализ отключен в быстром режиме."] },
+      ocr: { available: false, frames: [], text: "", warnings: ["OCR отключен в быстром режиме."] }
+    };
+  }
+  const [audio, video] = await Promise.all([
+    analyzeAudioStream(audioUrl, duration, cues, audioHeaders),
+    analyzeVideoStream(videoUrl, duration, videoHeaders)
+  ]);
+  const ocr = await extractFrameOcr(videoUrl, segments, duration, videoHeaders, pageUrl);
+  return { audio, video, ocr };
+}
+
+async function detectSceneSegments(streamUrl, duration, headers = {}) {
   if (!streamUrl || !duration) return [];
   const analysisLimit = Math.min(Number(duration), 1800);
   const args = [
     "-hide_banner",
     "-nostdin",
     "-t", String(analysisLimit),
-    "-i", streamUrl,
+    ...ffmpegInputArgs(streamUrl, headers),
     "-vf", "select='gt(scene,0.32)',showinfo",
     "-an",
     "-f", "null",
@@ -520,6 +1055,93 @@ function estimateVisualSignals(description, transcript, thumbnail) {
   };
 }
 
+function visualCueLabels(text) {
+  const value = String(text || "").toLowerCase();
+  const labels = [];
+  if (/слайд|презентац|slides|slide/.test(value)) labels.push("слайды/презентация");
+  if (/экран|демонстрац|screen|скрин|запись экрана/.test(value)) labels.push("демонстрация экрана");
+  if (/доска|whiteboard|board/.test(value)) labels.push("доска");
+  if (/(^|[^a-zа-я])код([^a-zа-я]|$)|python|javascript|\bsql\b|notebook|\bide\b|редактор кода|терминал|console/.test(value)) labels.push("код или рабочая среда");
+  if (/таблиц|графики|график (функции|зависимости|на экране)|диаграм|chart|table|spreadsheet/.test(value)) labels.push("таблицы/графики");
+  if (/формул|уравнен|задач|решени|математ|физик|formula|equation/.test(value)) labels.push("формулы/решение задач");
+  if (/схем|mind map|карта|diagram|flow/.test(value)) labels.push("схема/диаграмма");
+  if (/пример|разбор|практик|задани|упраж|demo|example|exercise/.test(value)) labels.push("визуальный пример или практика");
+  return [...new Set(labels)];
+}
+
+function buildVisualObservation(segment, index, context) {
+  const labels = visualCueLabels(`${segment.topic || ""} ${segment.type || ""} ${segment.note || ""} ${context.description}`);
+  const noSpeech = !context.transcript;
+  const sourceLabel = segment.source === "media"
+    ? "кадр/сцена из видеоряда"
+    : "визуальная проверка сегмента";
+  const score = Math.max(1, Math.min(10,
+    4.8 +
+    Math.min(labels.length, 4) * 0.7 +
+    (context.thumbnail ? 0.4 : 0) +
+    (segment.source === "media" ? 0.4 : 0) +
+    (noSpeech ? 0.5 : 0)
+  ));
+  const evidence = labels.length
+    ? labels.join(", ")
+    : (context.thumbnail ? "доступен thumbnail и таймкод сегмента" : "таймкод выделен, требуется проверка кадра");
+  const fallbackNote = noSpeech
+    ? "Речь/субтитры не найдены: при рейтинге этот фрагмент нужно оценивать по экрану, читаемости, действиям преподавателя, визуальным примерам и связности демонстрации."
+    : "Проверить соответствие визуального ряда речи: экран, слайды, доска, примеры, читаемость и отсутствие визуальной перегрузки.";
+
+  return {
+    time: segment.time || `${secondsToTime(index * 60)}-${secondsToTime((index + 1) * 60)}`,
+    type: sourceLabel,
+    source: "visual",
+    topic: segment.topic || segment.type || "",
+    score: Number(score.toFixed(1)),
+    evidence,
+    note: labels.length
+      ? `${fallbackNote} Обнаруженные визуальные маркеры: ${labels.join(", ")}.`
+      : fallbackNote,
+    thumbnail: context.thumbnail?.url || ""
+  };
+}
+
+function buildVisualObservations({ segments, description, transcript, thumbnail, mediaAnalysis }) {
+  const sourceSegments = Array.isArray(segments) ? segments.filter(Boolean) : [];
+  const hasMediaFrames = Boolean(mediaAnalysis?.video?.frames?.length || mediaAnalysis?.ocr?.frames?.length);
+  if (!sourceSegments.length && !thumbnail && !hasMediaFrames) return [];
+  const context = {
+    description: description || "",
+    transcript: String(transcript || "").trim(),
+    thumbnail
+  };
+  const limited = sourceSegments.length
+    ? sourceSegments.slice(0, 12)
+    : [{ time: "00:00-00:30", type: "thumbnail", note: "Доступен thumbnail YouTube.", source: "thumbnail" }];
+  const observations = limited.map((segment, index) => buildVisualObservation(segment, index, context));
+  const frameMetricObservations = (mediaAnalysis?.video?.frames || []).slice(0, 6).map((frame) => ({
+    time: frame.time,
+    type: "метрика кадра",
+    source: "ffmpeg-frame",
+    topic: "визуальное качество",
+    score: mediaAnalysis.video.readabilityScore || mediaAnalysis.video.score || 5,
+    evidence: `яркость ${frame.brightness}, контраст ${frame.contrast}`,
+    note: "Кадр измерен через ffmpeg: яркость и контраст используются как грубая оценка читаемости экрана.",
+    thumbnail: context.thumbnail?.url || ""
+  }));
+  const ocrObservations = (mediaAnalysis?.ocr?.frames || [])
+    .filter((frame) => frame.hasText)
+    .slice(0, 6)
+    .map((frame) => ({
+      time: frame.time,
+      type: "OCR кадра",
+      source: "frame-ocr",
+      topic: "текст на экране",
+      score: frame.text.length > 80 ? 8 : 6,
+      evidence: "распознан текст на кадре",
+      note: frame.text.slice(0, 220),
+      thumbnail: context.thumbnail?.url || ""
+    }));
+  return [...observations, ...frameMetricObservations, ...ocrObservations].slice(0, 24);
+}
+
 async function fetchText(url) {
   const response = await fetch(url, {
     headers: {
@@ -549,6 +1171,99 @@ async function getOEmbed(videoUrl) {
     return await fetchJson(`https://www.youtube.com/oembed?format=json&url=${encodeURIComponent(videoUrl)}`);
   } catch {
     return {};
+  }
+}
+
+async function runTesseract(framePath) {
+  const attempts = [
+    ["-l", "rus+eng", "--psm", "6"],
+    ["-l", "eng", "--psm", "6"],
+    ["--psm", "6"]
+  ];
+  let lastError = null;
+  for (const args of attempts) {
+    try {
+      const { stdout } = await execFilePromise("tesseract", [
+        framePath,
+        "stdout",
+        ...args
+      ], { timeout: 20000, maxBuffer: 1024 * 1024 * 2 });
+      return stdout;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError || new Error("tesseract не вернул текст");
+}
+
+async function extractFrameViaYtDlp(pageUrl, point, framePath) {
+  if (!pageUrl) throw new Error("нет исходной ссылки YouTube для fallback OCR");
+  const tempDir = path.dirname(framePath);
+  const clipBase = path.join(tempDir, `clip-${Math.round(point * 10)}`);
+  const sectionStart = Math.max(0, Number(point || 0) - 0.6);
+  const sectionEnd = sectionStart + 1.4;
+  const attempts = [
+    {
+      command: "yt-dlp",
+      args: [
+        "--no-playlist",
+        "--extractor-args", "youtube:player_client=android",
+        "--force-keyframes-at-cuts",
+        "--download-sections", `*${sectionStart}-${sectionEnd}`,
+        "-f", "best[height<=720]/best",
+        "-o", `${clipBase}.%(ext)s`,
+        pageUrl
+      ],
+      label: "yt-dlp section"
+    },
+    {
+      command: "python3",
+      args: [
+        "-m", "yt_dlp",
+        "--no-playlist",
+        "--extractor-args", "youtube:player_client=android",
+        "--force-keyframes-at-cuts",
+        "--download-sections", `*${sectionStart}-${sectionEnd}`,
+        "-f", "best[height<=720]/best",
+        "-o", `${clipBase}.%(ext)s`,
+        pageUrl
+      ],
+      label: "python3 -m yt_dlp section"
+    }
+  ];
+  const warnings = [];
+  for (const attempt of attempts) {
+    try {
+      await execFilePromise(attempt.command, attempt.args, { timeout: 70000, maxBuffer: 1024 * 1024 * 12 });
+      const files = await fs.readdir(tempDir);
+      const clip = files.find((file) => file.startsWith(path.basename(clipBase)) && !file.endsWith(".part"));
+      if (!clip) throw new Error("yt-dlp не создал временный фрагмент");
+      await execFilePromise("ffmpeg", [
+        "-hide_banner",
+        "-nostdin",
+        "-i", path.join(tempDir, clip),
+        "-frames:v", "1",
+        "-vf", "scale=960:-1",
+        "-q:v", "3",
+        "-y",
+        framePath
+      ], { timeout: 25000, maxBuffer: 1024 * 1024 * 4 });
+      return { source: attempt.label, warnings };
+    } catch (error) {
+      warnings.push(`${attempt.label}: ${error.message}`);
+    }
+  }
+  throw new Error(`fallback через yt-dlp не извлек кадр: ${warnings.join("; ")}`);
+}
+
+async function fetchYouTubeApiData(videoId) {
+  if (!youtubeApiKey) return null;
+  const apiUrl = `https://www.googleapis.com/youtube/v3/videos?part=snippet,contentDetails,statistics&id=${encodeURIComponent(videoId)}&key=${encodeURIComponent(youtubeApiKey)}`;
+  try {
+    const result = await fetchJson(apiUrl);
+    return Array.isArray(result.items) && result.items.length ? result.items[0] : null;
+  } catch {
+    return null;
   }
 }
 
@@ -584,31 +1299,194 @@ async function fetchCaptions(track) {
     const url = new URL(track.baseUrl);
     url.searchParams.set("fmt", "json3");
     const data = await fetchJson(url.toString());
-    cues = (data.events || [])
-      .filter((event) => Array.isArray(event.segs))
-      .map((event) => ({
-        start: Number(event.tStartMs || 0) / 1000,
-        duration: Number(event.dDurationMs || 0) / 1000,
-        text: decodeEntities(event.segs.map((seg) => seg.utf8 || "").join("").replace(/\s+/g, " ").trim())
-      }))
-      .filter((cue) => cue.text);
+    cues = cuesFromJson3(data);
   } catch {
-    const xml = await fetchText(track.baseUrl);
-    cues = [...xml.matchAll(/<text start="([^"]+)"(?: dur="([^"]+)")?[^>]*>([\s\S]*?)<\/text>/g)]
-      .map((match) => ({
-        start: Number(match[1] || 0),
-        duration: Number(match[2] || 0),
-        text: decodeEntities(match[3].replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim())
-      }))
-      .filter((cue) => cue.text);
+    const text = await fetchText(track.baseUrl);
+    cues = cuesFromXml(text);
+    if (!cues.length && /WEBVTT/i.test(text)) cues = cuesFromVtt(text);
   }
+  return captionResultFromCues(cues);
+}
+
+function cuesFromJson3(data = {}) {
+  return (data.events || [])
+    .filter((event) => Array.isArray(event.segs))
+    .map((event) => ({
+      start: Number(event.tStartMs || 0) / 1000,
+      duration: Number(event.dDurationMs || 0) / 1000,
+      text: decodeEntities(event.segs.map((seg) => seg.utf8 || "").join("").replace(/\s+/g, " ").trim())
+    }))
+    .filter((cue) => cue.text);
+}
+
+function cuesFromXml(xml = "") {
+  return [...String(xml).matchAll(/<text start="([^"]+)"(?: dur="([^"]+)")?[^>]*>([\s\S]*?)<\/text>/g)]
+    .map((match) => ({
+      start: Number(match[1] || 0),
+      duration: Number(match[2] || 0),
+      text: decodeEntities(match[3].replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim())
+    }))
+    .filter((cue) => cue.text);
+}
+
+function parseVttTime(value = "") {
+  const normalized = String(value).trim().replace(",", ".");
+  const parts = normalized.split(":");
+  if (parts.length < 2 || parts.length > 3) return null;
+  const nums = parts.map(Number);
+  if (nums.some((num) => Number.isNaN(num))) return null;
+  if (parts.length === 2) return nums[0] * 60 + nums[1];
+  return nums[0] * 3600 + nums[1] * 60 + nums[2];
+}
+
+function cuesFromVtt(vtt = "") {
+  const lines = String(vtt).replace(/\r/g, "").split("\n");
+  const cues = [];
+  let index = 0;
+  while (index < lines.length) {
+    let line = lines[index].trim();
+    if (!line || /^WEBVTT/i.test(line) || /^NOTE/i.test(line) || /^STYLE/i.test(line) || /^REGION/i.test(line)) {
+      index += 1;
+      continue;
+    }
+    if (!line.includes("-->")) {
+      index += 1;
+      line = (lines[index] || "").trim();
+    }
+    if (!line.includes("-->")) {
+      index += 1;
+      continue;
+    }
+    const [rawStart, rawEnd] = line.split("-->");
+    const start = parseVttTime(rawStart);
+    const end = parseVttTime((rawEnd || "").trim().split(/\s+/)[0]);
+    index += 1;
+    const textLines = [];
+    while (index < lines.length && lines[index].trim() !== "") {
+      textLines.push(lines[index].replace(/<[^>]+>/g, ""));
+      index += 1;
+    }
+    const text = decodeEntities(textLines.join(" ").replace(/\s+/g, " ").trim());
+    if (text && Number.isFinite(start) && Number.isFinite(end) && end > start) {
+      cues.push({ start, duration: end - start, text });
+    }
+    index += 1;
+  }
+  return cues;
+}
+
+function captionResultFromCues(cues = []) {
   return {
     transcript: cues.map((cue) => cue.text).join(" ").replace(/\s+/g, " ").trim(),
     cues
   };
 }
 
-async function fetchBestCaptions(tracks) {
+async function fetchCaptionFromUrl(url, ext = "") {
+  const format = String(ext || "").toLowerCase();
+  if (!url) return { transcript: "", cues: [] };
+  try {
+    if (format === "json3") {
+      const data = await fetchJson(url);
+      const cues = cuesFromJson3(data);
+      return captionResultFromCues(cues);
+    }
+    const text = await fetchText(url);
+    if (/WEBVTT/i.test(text) || format === "vtt") {
+      const cues = cuesFromVtt(text);
+      return captionResultFromCues(cues);
+    }
+    const cues = cuesFromXml(text);
+    if (cues.length) return captionResultFromCues(cues);
+    if (/^\s*\{/.test(text)) {
+      const data = JSON.parse(text);
+      return captionResultFromCues(cuesFromJson3(data));
+    }
+  } catch {
+    // Fall through to empty result.
+  }
+  return { transcript: "", cues: [] };
+}
+
+function languageScore(code = "", preferred = []) {
+  const value = String(code || "").toLowerCase();
+  const direct = preferred.findIndex((item) => value === item);
+  if (direct >= 0) return direct;
+  const family = preferred.findIndex((item) => value.startsWith(`${item}-`) || value.startsWith(`${item}_`) || value.startsWith(item));
+  if (family >= 0) return family + 0.2;
+  if (value === "ru" || value.startsWith("ru-")) return 10;
+  if (value === "en" || value.startsWith("en-")) return 11;
+  return 20;
+}
+
+function extScore(ext = "") {
+  const value = String(ext || "").toLowerCase();
+  if (value === "json3") return 0;
+  if (value === "srv3") return 1;
+  if (value === "vtt") return 2;
+  if (value === "ttml") return 3;
+  if (value === "srv2") return 4;
+  if (value === "srv1") return 5;
+  return 9;
+}
+
+function flattenCaptionEntries(map = {}, sourceType = "automatic") {
+  return Object.entries(map || {})
+    .flatMap(([languageCode, entries]) => (entries || []).map((entry) => ({
+      url: entry.url,
+      ext: entry.ext || "",
+      languageCode,
+      sourceType
+    })))
+    .filter((entry) => entry.url);
+}
+
+function pickBestCaptionEntry(entries = [], preferredLanguages = []) {
+  const preferred = preferredLanguages.map((value) => String(value || "").toLowerCase()).filter(Boolean);
+  return entries
+    .slice()
+    .sort((a, b) => {
+      const langDelta = languageScore(a.languageCode, preferred) - languageScore(b.languageCode, preferred);
+      if (langDelta !== 0) return langDelta;
+      return extScore(a.ext) - extScore(b.ext);
+    })[0] || null;
+}
+
+async function fetchCaptionsViaYtDlp(videoUrl, preferredLanguages = []) {
+  if (!videoUrl) return null;
+  const attempts = [
+    { command: "yt-dlp", args: ["-J", "--no-playlist", "--skip-download", "--extractor-args", "youtube:player_client=android", videoUrl], label: "yt-dlp json android" },
+    { command: "python3", args: ["-m", "yt_dlp", "-J", "--no-playlist", "--skip-download", "--extractor-args", "youtube:player_client=android", videoUrl], label: "python3 -m yt_dlp json android" },
+    { command: "yt-dlp", args: ["-J", "--no-playlist", "--skip-download", videoUrl], label: "yt-dlp json" },
+    { command: "python3", args: ["-m", "yt_dlp", "-J", "--no-playlist", "--skip-download", videoUrl], label: "python3 -m yt_dlp json" }
+  ];
+  for (const attempt of attempts) {
+    try {
+      const { stdout } = await execFilePromise(attempt.command, attempt.args, { timeout: 65000, maxBuffer: 1024 * 1024 * 16 });
+      const data = JSON.parse(stdout);
+      const automatic = flattenCaptionEntries(data.automatic_captions || {}, "automatic");
+      const manual = flattenCaptionEntries(data.subtitles || {}, "manual");
+      const best = pickBestCaptionEntry([...automatic, ...manual], preferredLanguages);
+      if (!best) continue;
+      const result = await fetchCaptionFromUrl(best.url, best.ext);
+      if (!result.transcript) continue;
+      return {
+        ...result,
+        track: {
+          baseUrl: best.url,
+          languageCode: best.languageCode,
+          sourceType: best.sourceType,
+          name: { simpleText: `${best.languageCode} (${best.sourceType}, yt-dlp)` }
+        }
+      };
+    } catch {
+      // Try the next yt-dlp variant.
+    }
+  }
+  return null;
+}
+
+async function fetchBestCaptions(tracks, videoUrl = "") {
   for (const track of orderCaptionTracks(tracks)) {
     try {
       const result = await fetchCaptions(track);
@@ -617,6 +1495,9 @@ async function fetchBestCaptions(tracks) {
       // Try the next manual or automatic caption track.
     }
   }
+  const preferred = orderCaptionTracks(tracks).map((track) => track.languageCode).filter(Boolean);
+  const ytDlpResult = await fetchCaptionsViaYtDlp(videoUrl, preferred);
+  if (ytDlpResult?.transcript) return ytDlpResult;
   return { transcript: "", cues: [], track: orderCaptionTracks(tracks)[0] };
 }
 
@@ -636,9 +1517,10 @@ async function analyzeYouTube(inputUrl, mode = "stream") {
   const videoId = extractVideoId(inputUrl);
   if (!videoId) throw new Error("Не смог распознать YouTube ID");
   const videoUrl = `https://www.youtube.com/watch?v=${videoId}`;
-  const [html, oembed] = await Promise.all([
+  const [html, oembed, apiData] = await Promise.all([
     fetchText(videoUrl),
-    getOEmbed(videoUrl)
+    getOEmbed(videoUrl),
+    fetchYouTubeApiData(videoId)
   ]);
   const playerJson = extractBalancedJson(html, "ytInitialPlayerResponse");
   let player = {};
@@ -648,12 +1530,30 @@ async function analyzeYouTube(inputUrl, mode = "stream") {
     player = {};
   }
   const details = player.videoDetails || {};
+  const snippet = apiData?.snippet || {};
   const micro = player.microformat?.playerMicroformatRenderer || {};
-  const title = details.title || micro.title?.simpleText || oembed.title || "Без названия";
-  const description = details.shortDescription || flattenText(micro.description) || "";
+  const title = details.title || micro.title?.simpleText || snippet.title || oembed.title || "Без названия";
+  const description = details.shortDescription || flattenText(micro.description) || snippet.description || "";
   const videoDuration = Number(details.lengthSeconds || micro.lengthSeconds || 0);
   const tracks = player.captions?.playerCaptionsTracklistRenderer?.captionTracks || [];
-  const streamUrl = chooseStreamUrl(player.streamingData || {});
+  let streamUrl = chooseStreamUrl(player.streamingData || {});
+  let audioUrl = chooseAudioStreamUrl(player.streamingData || {});
+  let streamResolver = {
+    available: Boolean(streamUrl || audioUrl),
+    source: "ytInitialPlayerResponse",
+    audioHeaders: {},
+    videoHeaders: {},
+    warnings: []
+  };
+  if (mode === "stream" && (!streamUrl || !audioUrl)) {
+    const ytDlpStreams = await resolveYtDlpStreams(videoUrl);
+    streamResolver = ytDlpStreams;
+    streamUrl = streamUrl || ytDlpStreams.videoUrl;
+    audioUrl = audioUrl || ytDlpStreams.audioUrl;
+  }
+  if (!audioUrl && streamUrl) audioUrl = streamUrl;
+  const audioHeaders = streamResolver.audioHeaders || {};
+  const videoHeaders = streamResolver.videoHeaders || {};
   const [{ transcript, cues, track }, thumbnail] = await Promise.all([
     fetchBestCaptions(tracks),
     mode === "stream" ? probeThumbnail(videoId) : Promise.resolve(null)
@@ -663,7 +1563,7 @@ async function analyzeYouTube(inputUrl, mode = "stream") {
   let mediaSegments = [];
   if (!chapterSegments.length && !cues.length && mode === "stream") {
     try {
-      mediaSegments = await detectSceneSegments(streamUrl, videoDuration);
+      mediaSegments = await detectSceneSegments(streamUrl, videoDuration, videoHeaders);
       if (!mediaSegments.length) {
         mediaSegments = buildDurationSegments(videoDuration, "Смены сцен не найдены; сегмент построен по длительности ролика.");
       }
@@ -674,6 +1574,19 @@ async function analyzeYouTube(inputUrl, mode = "stream") {
   const chapterText = chapters.map((chapter) => `${secondsToTime(chapter.start)} ${chapter.title}`).join("\n");
   const combinedForTopic = `${title} ${description} ${chapterText} ${transcript}`;
   const visual = estimateVisualSignals(description, transcript, thumbnail);
+  const segments = chapterSegments.length ? chapterSegments : (cues.length ? buildSegments(cues) : mediaSegments);
+  const mediaAnalysis = await analyzeMediaStreams({
+    audioUrl,
+    videoUrl: streamUrl,
+    pageUrl: videoUrl,
+    duration: videoDuration,
+    cues,
+    segments,
+    mode,
+    audioHeaders,
+    videoHeaders
+  });
+  const visualObservations = buildVisualObservations({ segments, description, transcript, thumbnail, mediaAnalysis });
   const signals = [
     "название и описание страницы YouTube",
     chapterSegments.length ? "главы и тематические таймкоды найдены в описании" : "",
@@ -681,27 +1594,72 @@ async function analyzeYouTube(inputUrl, mode = "stream") {
     transcript && track?.sourceType === "automatic" ? "автоматические субтитры YouTube с таймкодами" : "",
     !transcript ? "ручные и автоматические субтитры не найдены" : "",
     mediaSegments.length ? "сегменты построены по видеопотоку без сохранения файла" : "",
+    streamResolver.available ? `медиапотоки получены через ${streamResolver.source}` : "",
+    mediaAnalysis.audio?.available ? "аудио-метрики рассчитаны через ffmpeg" : "",
+    mediaAnalysis.video?.available ? "визуальные метрики кадров рассчитаны через ffmpeg" : "",
+    mediaAnalysis.ocr?.available ? "OCR текста на кадрах выполнен через tesseract" : "",
+    visualObservations.length ? "визуальные наблюдения добавлены в пакет рейтингования" : "",
+    !transcript && visualObservations.length ? "включен fallback: оценка может опираться на экран и визуальные действия" : "",
     mode === "stream" && thumbnail ? "thumbnail проверен без сохранения файла" : "",
     cues.length ? "темп речи оценен по таймингам субтитров" : ""
   ].filter(Boolean);
+  const visualText = visualObservations.map((item, index) => (
+    `${index + 1}. ${item.time} | ${item.evidence} | ${item.note}${item.thumbnail ? ` | thumbnail: ${item.thumbnail}` : ""}`
+  )).join("\n");
+  const audioText = mediaAnalysis.audio?.available
+    ? `Аудио: громкость ${mediaAnalysis.audio.meanVolumeDb ?? "н/д"} dB, тишина ${mediaAnalysis.audio.silenceRatio ?? "н/д"}, оценка ${mediaAnalysis.audio.score}/10. ${mediaAnalysis.audio.warnings?.join(" ") || ""}`
+    : `Аудио: ${mediaAnalysis.audio?.warnings?.join(" ") || "метрики недоступны."}`;
+  const videoText = mediaAnalysis.video?.available
+    ? `Видео: яркость ${mediaAnalysis.video.averageBrightness ?? "н/д"}, контраст ${mediaAnalysis.video.averageContrast ?? "н/д"}, читаемость ${mediaAnalysis.video.readabilityScore}/10. ${mediaAnalysis.video.warnings?.join(" ") || ""}`
+    : `Видео: ${mediaAnalysis.video?.warnings?.join(" ") || "метрики недоступны."}`;
+  const ocrText = mediaAnalysis.ocr?.text
+    ? `OCR кадров:\n${mediaAnalysis.ocr.text}`
+    : `OCR кадров: ${mediaAnalysis.ocr?.warnings?.join(" ") || "текст на кадрах не распознан."}`;
+  const topicClassification = classifyVideoTopic({
+    title,
+    description: `${description}\n${chapterText}`,
+    transcript,
+    ocr: `${mediaAnalysis.ocr?.text || ""}\n${visualText}`
+  });
+  const ocrWarningText = (mediaAnalysis.ocr?.warnings || []).join(" ");
   const limitations = [
-    "OCR кадров не выполняется без доступа к видеоряду",
-    "качество звука оценено предварительно, без анализа аудиопотока",
-    "качество видео оценено предварительно по доступным косвенным сигналам",
+    mediaAnalysis.ocr?.available
+      ? "OCR кадров выполнен локальным движком и может ошибаться на мелком, размытом или декоративном тексте"
+      : mode !== "stream"
+        ? "OCR кадров отключен в быстром режиме"
+        : /tesseract не установлен/i.test(ocrWarningText)
+          ? "OCR кадров требует установленный tesseract; без него текст на экране не распознается"
+          : "OCR кадров не получил читаемый текст или не смог извлечь кадры из YouTube-потока",
+    mediaAnalysis.audio?.available
+      ? "аудио-метрики отражают громкость и тишину, но не заменяют полноценную оценку дикции"
+      : "качество звука оценено предварительно, потому что аудиопоток не был доступен для ffmpeg",
+    mediaAnalysis.video?.available
+      ? "визуальные метрики отражают яркость и контраст, но не заменяют полноценную vision-модель"
+      : "качество видео оценено предварительно по доступным косвенным сигналам",
     "комментарии YouTube не подключены; тематические таймкоды берутся из описания"
   ];
   return {
     url: videoUrl,
     title,
+    topic: topicClassification.label,
+    topicClassification,
     topicSeed: combinedForTopic,
     description,
     transcript,
-    ocr: [description, chapterText ? `\nГлавы из описания:\n${chapterText}` : ""].filter(Boolean).join("\n"),
-    audio: transcript ? 7 : 5,
-    video: visual.video,
-    slides: visual.slides,
-    pace: estimatePace(cues),
-    segments: chapterSegments.length ? chapterSegments : (cues.length ? buildSegments(cues) : mediaSegments),
+    ocr: [
+      description,
+      chapterText ? `\nГлавы из описания:\n${chapterText}` : "",
+      topicClassification.label !== "Без темы" ? `\nТематика по данным ролика:\n${topicClassification.label}; уверенность: ${topicClassification.confidence}; признаки: ${topicClassification.evidence.join("; ") || "нет"}` : "\nТематика по данным ролика:\nне определена достаточно надежно",
+      `\nМедиа-анализ:\n${audioText}\n${videoText}\n${ocrText}`,
+      visualText ? `\nВизуальные наблюдения по экрану:\n${visualText}` : ""
+    ].filter(Boolean).join("\n"),
+    audio: mediaAnalysis.audio?.available ? mediaAnalysis.audio.score : (transcript ? 7 : 5),
+    video: mediaAnalysis.video?.available ? Math.round(((visual.video + mediaAnalysis.video.score) / 2) * 10) / 10 : visual.video,
+    slides: mediaAnalysis.video?.available ? Math.round(((visual.slides + mediaAnalysis.video.readabilityScore) / 2) * 10) / 10 : visual.slides,
+    pace: mediaAnalysis.audio?.speechScore || estimatePace(cues),
+    segments,
+    visualObservations,
+    mediaAnalysis,
     source: {
       videoId,
       mode,
@@ -713,12 +1671,23 @@ async function analyzeYouTube(inputUrl, mode = "stream") {
       chaptersFound: chapters.length,
       chapterSegments: chapterSegments.length,
       mediaSegments: mediaSegments.length,
+      streamResolver: {
+        available: Boolean(streamUrl || audioUrl),
+        source: streamResolver.source || "",
+        hasAudioUrl: Boolean(audioUrl),
+        hasVideoUrl: Boolean(streamUrl),
+        warnings: streamResolver.warnings || []
+      },
+      visualObservations: visualObservations.length,
+      audioAnalyzed: Boolean(mediaAnalysis.audio?.available),
+      videoAnalyzed: Boolean(mediaAnalysis.video?.available),
+      ocrAnalyzed: Boolean(mediaAnalysis.ocr?.available),
       transcriptAvailable: Boolean(transcript),
       signals,
       limitations,
       note: transcript
         ? `Название, описание, ${track?.sourceType === "automatic" ? "автоматические" : "ручные"} субтитры и сегменты получены без сохранения видеофайла.`
-        : "Название и описание получены автоматически, но ручные и автоматические субтитры не найдены."
+        : "Название и описание получены автоматически, субтитры не найдены; рейтинг дополнен визуальным fallback по экрану и сценам."
     }
   };
 }
@@ -799,40 +1768,54 @@ async function serveStatic(req, res, pathname) {
 }
 
 const server = http.createServer(async (req, res) => {
-  const requestUrl = new URL(req.url, `http://${req.headers.host}`);
-  const pathname = requestUrl.pathname.replace(/\/+$/, "") || "/";
-  if (pathname === "/healthz") {
-    json(res, 200, { ok: true, service: "green-a" });
-    return;
-  }
-  if (pathname === "/api/youtube") {
-    try {
-      const url = requestUrl.searchParams.get("url") || "";
-      const mode = requestUrl.searchParams.get("mode") || "stream";
-      const payload = await analyzeYouTube(url, mode);
-      json(res, 200, payload);
-    } catch (error) {
-      json(res, 400, { error: error.message });
+  try {
+    const baseHost = req.headers.host || `${host}:${port}`;
+    const requestUrl = new URL(req.url || "/", `http://${baseHost}`);
+    const pathname = requestUrl.pathname.replace(/\/+$/, "") || "/";
+    if (pathname === "/healthz") {
+      json(res, 200, { ok: true, service: "green-a" });
+      return;
     }
-    return;
-  }
-  if (pathname === "/api/popular") {
-    try {
-      const topic = requestUrl.searchParams.get("topic") || "";
-      const currentUrl = requestUrl.searchParams.get("currentUrl") || "";
-      if (!topic.trim()) throw new Error("Нет темы для поиска.");
-      const payload = await findPopularBenchmark(topic, currentUrl);
-      json(res, 200, payload);
-    } catch (error) {
-      json(res, 400, { error: error.message });
+    if (pathname === "/api/youtube") {
+      try {
+        const url = requestUrl.searchParams.get("url") || "";
+        const mode = requestUrl.searchParams.get("mode") || "stream";
+        const payload = await analyzeYouTube(url, mode);
+        json(res, 200, payload);
+      } catch (error) {
+        json(res, 400, { error: error.message });
+      }
+      return;
     }
-    return;
+    if (pathname === "/api/popular") {
+      try {
+        const topic = requestUrl.searchParams.get("topic") || "";
+        const currentUrl = requestUrl.searchParams.get("currentUrl") || "";
+        if (!topic.trim()) throw new Error("Нет темы для поиска.");
+        const payload = await findPopularBenchmark(topic, currentUrl);
+        json(res, 200, payload);
+      } catch (error) {
+        json(res, 400, { error: error.message });
+      }
+      return;
+    }
+    if (pathname.startsWith("/api/")) {
+      json(res, 404, { error: "Неизвестный API endpoint." });
+      return;
+    }
+    let decodedPathname = "";
+    try {
+      decodedPathname = decodeURIComponent(requestUrl.pathname);
+    } catch {
+      json(res, 400, { error: "Некорректное кодирование URL пути." });
+      return;
+    }
+    await serveStatic(req, res, decodedPathname);
+  } catch (error) {
+    console.error("Unhandled request error:", error);
+    if (!res.headersSent) json(res, 500, { error: "Внутренняя ошибка сервера." });
+    else res.end();
   }
-  if (pathname.startsWith("/api/")) {
-    json(res, 404, { error: "Неизвестный API endpoint." });
-    return;
-  }
-  await serveStatic(req, res, decodeURIComponent(requestUrl.pathname));
 });
 
 server.listen(port, host, () => {

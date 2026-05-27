@@ -1,0 +1,53 @@
+[superpowers]
+# Green Argus Index - Superpowers Configuration
+
+## Project Settings
+project_name = "Green Argus Index"
+description = "AI-powered educational video quality assessment"
+methodology = "superpowers-tdd"
+
+## Core Values
+test_driven = true
+systematic_over_adhoc = true
+simplicity_first = true
+verify_before_shipping = true
+
+## Mandatory Workflows
+brainstorming = true
+writing_plans = true
+test_driven_development = true
+subagent_driven_development = true
+code_review = true
+
+## Spec Reference
+spec_file = "spec.md"
+design_doc = "DESIGN.md"
+plan_doc = "PLAN.md"
+
+## Test Strategy
+test_location = "tests/"
+test_pattern = "*.test.js"
+min_coverage = 70
+tdd_cycle = "RED-GREEN-REFACTOR"
+
+## Git Workflow
+use_worktrees = true
+branch_strategy = "one-task-per-branch"
+auto_commit = true
+commit_message_format = "type: task description"
+
+## Code Standards
+language = "javascript"
+linter_config = ".eslintrc"
+formatter = "prettier"
+
+## Task Breakdown
+max_task_minutes = 5
+parallel_tasks = 2
+review_gates = ["spec-compliance", "code-quality"]
+
+## Success Criteria
+all_tests_green = true
+no_breaking_changes = true
+spec_fully_aligned = true
+output_format_complete = true
