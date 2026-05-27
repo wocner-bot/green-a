@@ -60,6 +60,20 @@ AZURE_VIDEO_INDEXER_TIMEOUT_MS=30000
 
 Любые push в главную ветку (main) автоматически запустят новое развертывание.
 
+## Автодеплой через GitHub Actions (резервный вариант)
+
+В репозиторий добавлен workflow:
+
+- `.github/workflows/render-deploy.yml`
+
+Он запускается на каждый push в `main` и дергает Render Deploy Hook.
+
+Что нужно сделать один раз в GitHub:
+
+1. Открой `Settings` → `Secrets and variables` → `Actions`.
+2. Создай секрет `RENDER_DEPLOY_HOOK`.
+3. Вставь туда URL из Render: `Service` → `Settings` → `Deploy Hook`.
+
 ## Файлы конфигурации
 
 - `render.yaml` - основная конфигурация Render
