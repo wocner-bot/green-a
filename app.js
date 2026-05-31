@@ -92,7 +92,7 @@ const state = {
   mediaAnalysis: null
 };
 
-const NOT_AVAILABLE_LABEL = "Not Available";
+const NON_EDUCATIONAL_FLOOR_TOTAL = 0;
 
 const els = {
   videoUrl: document.querySelector("#videoUrl"),
@@ -627,19 +627,22 @@ function calculateScores(video = null) {
     communication: clamp((data.pace * 0.45) + (data.audio * 0.22) + structureHits * 0.25 + (visualObservations.length ? 0.35 : 0) + 1.2)
   };
   scores.educationalFitScore = educationalFit.score;
+  if (educationalFit.exclude) {
+    for (const scale of scales) scores[scale.id] = 0;
+  }
 
   return { scores, data, flags: { salesHits, promiseHits, sourceHits, practiceHits, textLength, educationalFit, segmentQuality, visualQuality, visualObservationCount: visualObservations.length, visualFallbackActive } };
 }
 
 function analyzeVideo(video) {
   const { scores, flags, data } = calculateScores(video);
-  const total = flags.educationalFit.exclude ? null : weightedTotal(scores);
+  const total = flags.educationalFit.exclude ? NON_EDUCATIONAL_FLOOR_TOTAL : weightedTotal(scores);
   const risks = buildRisks(scores, flags, data);
   return {
     ...video,
     scores,
     total,
-    grade: flags.educationalFit.exclude ? "N/A" : gradeFor(total),
+    grade: gradeFor(total),
     educationalFit: flags.educationalFit,
     risks,
     riskTotal: risks.filter(([level]) => level !== "low").length
@@ -1185,8 +1188,7 @@ function renderAudience(scores, flags, data) {
 function buildRisks(scores, flags, data) {
   const risks = [];
   if (flags.educationalFit.exclude) {
-    risks.push(["high", "Не классифицировано как обучающее видео", `По описанию и содержанию не хватает учебной механики: цели, шагов, практики или проверки понимания. ${flags.educationalFit.reasons.join("; ")}.`]);
-    return risks;
+    risks.push(["high", "Не классифицировано как обучающее видео", `По описанию и содержанию не хватает учебной механики: цели, шагов, практики или проверки понимания. Выставлен минимальный рейтинг по шкале. ${flags.educationalFit.reasons.join("; ")}.`]);
   }
   if (flags.educationalFit.weak) risks.push(["medium", "Пограничный обучающий формат", `Видео частично похоже на обучающее, но признаков учебной механики пока недостаточно для высокой уверенности. Оценка формата: ${flags.educationalFit.score}/10.`]);
   const majorProfile = majorQualityProfile(scores);
@@ -1231,7 +1233,7 @@ function renderEvidence(scores, flags = null) {
     return [`${segment.time} · ${segment.type}`, note];
   });
   if (flags?.educationalFit?.exclude) {
-    rows.push(["Классификация", `Видео исключено из рейтинга как не обучающее. Причины: ${flags.educationalFit.reasons.join("; ")}.`]);
+    rows.push(["Классификация", `Видео не прошло критерии обучающего формата, поэтому ему присвоен минимальный рейтинг по шкале. Причины: ${flags.educationalFit.reasons.join("; ")}.`]);
   } else if (flags?.educationalFit?.weak) {
     rows.push(["Классификация", `Видео отмечено как погранично обучающее. Оценка формата: ${flags.educationalFit.score}/10. Причины: ${flags.educationalFit.reasons.join("; ")}.`]);
   }
@@ -1287,8 +1289,8 @@ URL: ${video.url}
 Режим анализа: ${els.analysisMode.value}
 
 ТЕКУЩИЙ РАСЧЕТ:
-Итог: ${flags.educationalFit.exclude ? NOT_AVAILABLE_LABEL : weightedTotal(scores)}
-Класс: ${flags.educationalFit.exclude ? "N/A" : gradeFor(weightedTotal(scores))}
+Итог: ${flags.educationalFit.exclude ? NON_EDUCATIONAL_FLOOR_TOTAL : weightedTotal(scores)}
+Класс: ${gradeFor(flags.educationalFit.exclude ? NON_EDUCATIONAL_FLOOR_TOTAL : weightedTotal(scores))}
 Оценка обучающего формата: ${flags.educationalFit.score}/10
 Причины классификации: ${flags.educationalFit.reasons.join("; ")}
 
@@ -1387,8 +1389,8 @@ function exportRatingData() {
   }
   const video = currentVideoPayload();
   const { scores, flags, data } = calculateScores();
-  const total = flags.educationalFit.exclude ? null : weightedTotal(scores);
-  const grade = flags.educationalFit.exclude ? "N/A" : gradeFor(total);
+  const total = flags.educationalFit.exclude ? NON_EDUCATIONAL_FLOOR_TOTAL : weightedTotal(scores);
+  const grade = gradeFor(total);
   const risks = buildRisks(scores, flags, data);
   const timecodeIssues = validateTimecodes();
   const audienceRows = audienceFit(scores, flags, data);
@@ -1416,10 +1418,10 @@ function exportRatingData() {
         ["Тематика: альтернативы", (topicInfo.alternatives || []).map((item) => `${item.label}: ${item.score}`).join("; ")],
         ["Benchmark topic", benchmarkTopic(video)],
         ["Режим анализа", els.analysisMode.value],
-        ["Итоговый балл", total ?? NOT_AVAILABLE_LABEL],
+        ["Итоговый балл", total],
         ["Класс", grade],
         ["Обучающий формат, 0-10", flags.educationalFit.score],
-        ["Исключено из рейтинга", flags.educationalFit.exclude],
+        ["Не прошел критерий обучающего формата", flags.educationalFit.exclude],
         ["Слабый обучающий формат", flags.educationalFit.weak],
         ["Причины классификации", flags.educationalFit.reasons.join("; ")],
         ["Качество звука", Number(video.audio)],
@@ -1554,14 +1556,14 @@ function exportRatingData() {
 
 function currentAnalysis() {
   const { scores, flags } = calculateScores();
-  const total = flags.educationalFit.exclude ? null : weightedTotal(scores);
+  const total = flags.educationalFit.exclude ? NON_EDUCATIONAL_FLOOR_TOTAL : weightedTotal(scores);
   const draft = currentVideoPayload();
   const topicInfo = draft.topicClassification || classifyTopic(draft);
   return {
     ...draft,
     scores,
     total,
-    grade: flags.educationalFit.exclude ? "N/A" : gradeFor(total),
+    grade: gradeFor(total),
     educationalFit: flags.educationalFit,
     topic: topicInfo.label !== "Без темы" ? topicInfo.label : draft.topic,
     topicClassification: topicInfo,
@@ -1581,15 +1583,10 @@ function scoreDeltaRows(referenceScores, currentScores) {
 }
 
 function renderBenchmarks(current) {
-  if (current.educationalFit?.exclude) {
-    els.benchmarkList.innerHTML = `<div class="empty-state">Бенчмарки не подбираются: текущий ролик не классифицирован как обучающий.</div>`;
-    return;
-  }
   const currentTopic = topicKey(current);
   const currentUrl = current.url.trim();
   const candidates = state.videos
     .map(analyzeVideo)
-    .filter((video) => !video.educationalFit?.exclude)
     .filter((video) => {
       const sameTopic = topicKey(video) === currentTopic;
       const sameVideo = currentUrl && video.url.trim() === currentUrl;
@@ -1641,7 +1638,7 @@ function escapeHtml(value) {
 
 function renderDashboard() {
   const analyzed = state.videos.map(analyzeVideo);
-  const ranked = analyzed.filter((video) => !video.educationalFit?.exclude).sort((a, b) => b.total - a.total);
+  const ranked = analyzed.sort((a, b) => b.total - a.total);
   const riskTotal = ranked.reduce((sum, video) => sum + video.riskTotal, 0);
   const average = ranked.length ? Math.round(ranked.reduce((sum, video) => sum + video.total, 0) / ranked.length) : 0;
   const topics = groupByTopic(ranked);
@@ -1708,10 +1705,6 @@ function renderRanking(ranked) {
 function renderPopularBenchmark(current) {
   if (!state.hasLoadedVideo || !current.url.trim()) {
     els.popularBenchmark.innerHTML = `<div class="empty-state">Загрузите YouTube URL, чтобы подобрать предметный benchmark.</div>`;
-    return;
-  }
-  if (current.educationalFit?.exclude) {
-    els.popularBenchmark.innerHTML = `<div class="empty-state">Benchmark не подбирается: текущий ролик не является обучающим по критериям Green Argus.</div>`;
     return;
   }
   if (state.popularStatus === "loading") {
@@ -1975,13 +1968,13 @@ function update() {
   }
   const { scores, flags, data } = calculateScores();
   const isExcluded = flags.educationalFit.exclude;
-  const total = isExcluded ? null : weightedTotal(scores);
-  const grade = isExcluded ? "N/A" : gradeFor(total);
-  els.score.textContent = total ?? NOT_AVAILABLE_LABEL;
+  const total = isExcluded ? NON_EDUCATIONAL_FLOOR_TOTAL : weightedTotal(scores);
+  const grade = gradeFor(total);
+  els.score.textContent = total;
   els.grade.textContent = grade;
   els.ratingSummary.textContent = !isExcluded
     ? [summaryFor(total), flags.educationalFit.weak ? `Пограничный обучающий формат: уверенность ${flags.educationalFit.confidence || "low"}, оценка ${flags.educationalFit.score}/10.` : "", ratingCapNote(scores)].filter(Boolean).join(" ")
-    : `Ролик исключен из образовательного рейтинга и помечен как ${NOT_AVAILABLE_LABEL}: по описанию и содержанию это скорее познавательный/медийный материал без достаточной учебной механики.`;
+    : `Ролик не прошел критерии обучающего формата, поэтому по методике ему присвоен минимальный рейтинг ${NON_EDUCATIONAL_FLOOR_TOTAL}. Причины: ${flags.educationalFit.reasons.join("; ")}.`;
 
   els.transcriptView.textContent = data.transcript.trim() || "Транскрипт отсутствует.";
   const visualLines = visualObservationLines(state.visualObservations).join("\n");
