@@ -147,10 +147,31 @@ function finiteScore(value, fallback = 0) {
 
 function resolveVideoMetric(video, key, fallback) {
   const media = video?.mediaAnalysis || {};
-  if (key === "audio") return finiteScore(video?.audio, finiteScore(media.audio?.score, fallback));
-  if (key === "video") return finiteScore(video?.video, finiteScore(media.video?.score, fallback));
-  if (key === "slides") return finiteScore(video?.slides, finiteScore(media.video?.readabilityScore ?? media.video?.score, fallback));
-  if (key === "pace") return finiteScore(video?.pace, finiteScore(media.audio?.speechScore ?? media.audio?.score, fallback));
+  const source = video?.source || {};
+  const generatedWithoutMeasurement = (
+    (key === "audio" && source.audioAnalyzed === false) ||
+    ((key === "video" || key === "slides") && source.videoAnalyzed === false)
+  );
+  const audioScore = media.audio?.available ? media.audio?.score : undefined;
+  const videoScore = media.video?.available ? media.video?.score : undefined;
+  const slideScore = media.video?.available ? (media.video?.readabilityScore ?? media.video?.score) : undefined;
+  const paceScore = media.audio?.available ? (media.audio?.speechScore ?? media.audio?.score) : undefined;
+  if (key === "audio") {
+    return generatedWithoutMeasurement
+      ? finiteScore(audioScore, fallback)
+      : finiteScore(video?.audio, finiteScore(audioScore, fallback));
+  }
+  if (key === "video") {
+    return generatedWithoutMeasurement
+      ? finiteScore(videoScore, fallback)
+      : finiteScore(video?.video, finiteScore(videoScore, fallback));
+  }
+  if (key === "slides") {
+    return generatedWithoutMeasurement
+      ? finiteScore(slideScore, fallback)
+      : finiteScore(video?.slides, finiteScore(slideScore, fallback));
+  }
+  if (key === "pace") return finiteScore(video?.pace, finiteScore(paceScore, fallback));
   return finiteScore(video?.[key], fallback);
 }
 
@@ -562,6 +583,7 @@ function currentVideoPayload() {
 
 function calculateScores(video = null) {
   const visualObservations = video ? (video.visualObservations || []) : state.visualObservations;
+  const mediaAnalysis = video ? (video.mediaAnalysis || null) : state.mediaAnalysis;
   const visualText = visualObservationLines(visualObservations).join("\n");
   const visualSignalText = visualObservations
     .map((item) => `${item.evidence || ""} ${item.type || ""} ${item.topic || ""} ${item.source || ""}`)
@@ -595,6 +617,7 @@ function calculateScores(video = null) {
   const descriptionChapterHits = segments.filter((segment) => segment.source === "description" || /тема из описания youtube/i.test(segment.note || "")).length;
   const mediaSegmentHits = segments.filter((segment) => segment.source === "media" || /видеопоток|видеоряду|длительности ролика/i.test(segment.note || "")).length;
   const practicalChapterHits = segments.filter((segment) => /практи|задани|упраж|демо|пример/i.test(`${segment.type} ${segment.note}`)).length;
+  const lessonSeriesHits = countHits(data.combined, ["видеоурок", "урок", "теория", "алгебра", "геометр", "математ", "физик", "хими", "биолог", "lecture", "lesson"]);
   const segmentScores = segments.map((segment) => Number(segment.score)).filter((score) => Number.isFinite(score) && score > 0);
   const segmentQuality = segmentScores.length
     ? segmentScores.reduce((sum, score) => sum + score, 0) / segmentScores.length
@@ -630,20 +653,28 @@ function calculateScores(video = null) {
     visualInstructionHits,
     visualFallbackActive
   });
+  const curriculumTheoryLesson = educationalFit.eligible &&
+    !salesHits &&
+    !promiseHits &&
+    (descriptionChapterHits >= 4 || segments.length >= 5) &&
+    (termHits >= 1 || structureHits >= 2 || descriptionChapterHits >= 6 || segmentQuality >= 2.4) &&
+    lessonSeriesHits >= 2;
+  const curriculumDepthBonus = curriculumTheoryLesson ? 1.15 : 0;
+  const curriculumReliabilityBonus = curriculumTheoryLesson ? 1.45 : 0;
 
   const scores = {
-    depth: clamp(3 + Math.min(textLength / 900, 2.1) + termHits * 0.55 + sourceHits * 0.35 + segmentDepthBonus + visualFallbackBonus * 0.45 - salesHits * 0.35),
+    depth: clamp(3 + Math.min(textLength / 900, 2.1) + termHits * 0.55 + sourceHits * 0.35 + segmentDepthBonus + visualFallbackBonus * 0.45 + curriculumDepthBonus - salesHits * 0.35),
     pedagogy: clamp(2.5 + exampleHits * 0.75 + practiceHits * 0.85 + types * 0.35 + segmentBonus + Math.min(descriptionChapterHits, 6) * 0.18 + Math.max(0, segmentDepthBonus) + visualFallbackBonus * 0.65),
     structure: clamp(2.8 + structureHits * 0.75 + types * 0.6 + segmentBonus + Math.min(descriptionChapterHits, 8) * 0.28 + Math.min(mediaSegmentHits, 8) * 0.12 + (segmentQuality ? 0.35 : 0) + (visualObservations.length ? 0.35 : 0)),
     practice: clamp(2.2 + practiceHits * 1.1 + exampleHits * 0.45 + practicalChapterHits * 0.45 + segments.filter((segment) => /практика|задание|проверка/i.test(`${segment.type} ${segment.evidence || ""}`)).length * 0.35),
-    reliability: clamp(2.8 + sourceHits * 1.25 - promiseHits * 1.2 - salesHits * 0.6),
+    reliability: clamp(2.8 + sourceHits * 1.25 + curriculumReliabilityBonus - promiseHits * 1.2 - salesHits * 0.6),
     complexity: clamp(3 + termHits * 0.45 + types * 0.5 + (textLength > 1200 ? 1.1 : 0.4)),
     technical: clamp((data.audio * 0.32) + (data.video * 0.36) + (data.slides * 0.28) + (visualQuality ? Math.max(0, visualQuality - 5) * 0.08 : 0)),
     communication: clamp((data.pace * 0.45) + (data.audio * 0.22) + structureHits * 0.25 + (visualObservations.length ? 0.35 : 0) + 1.2)
   };
   scores.educationalFitScore = educationalFit.score;
 
-  return { scores, data, flags: { salesHits, promiseHits, sourceHits, practiceHits, textLength, educationalFit, segmentQuality, visualQuality, visualObservationCount: visualObservations.length, visualFallbackActive } };
+  return { scores, data, flags: { salesHits, promiseHits, sourceHits, practiceHits, textLength, educationalFit, segmentQuality, visualQuality, visualObservationCount: visualObservations.length, visualFallbackActive, mediaAudioMeasured: Boolean(mediaAnalysis?.audio?.available), mediaVideoMeasured: Boolean(mediaAnalysis?.video?.available), curriculumTheoryLesson } };
 }
 
 function analyzeVideo(video) {
@@ -846,6 +877,10 @@ function assessEducationalFit(data = {}, segments = [], signals = {}) {
   const isCourseOverviewSales = /курс|course/i.test(text) && /обзор|review/i.test(text) && !hasOutcomeSignal && salesPushMarkers >= 1;
   const isClearlyEntertainment = (hardNonLearningHits >= 2 || titleMediaMarkers > 0 || talkFormatHits > 0) && !hasEducationalMechanics && !hasStrongTitleIntent;
   const isStrongSalesNoTeaching = (salesPushMarkers >= 3 || quickPromiseMarkers >= 3) && !hasEducationalMechanics;
+  const isSatiricalEntertainmentReview = (
+    /badcomedian|обзор\s+(комед|фильм|кино|сериал)|movie review|film review|реценз/i.test(titleAndTopic) ||
+    ((/фильм|комед|сериал|кино/i.test(text) && /обзор|review/i.test(text)))
+  ) && hardNonLearningHits >= 1 && !explicitEducationalTitle && !hasChapterStructure;
   const hardNegativeCount = [
     strongInfotainment,
     onlyHomeworkOrViewing,
@@ -854,7 +889,8 @@ function assessEducationalFit(data = {}, segments = [], signals = {}) {
     hasOverpromising,
     isAggressiveMarketing,
     isOverviewWithoutTeachingCore,
-    isSalesLeadWithoutPractice
+    isSalesLeadWithoutPractice,
+    isSatiricalEntertainmentReview
   ].filter(Boolean).length;
 
   const nonEducational = (score < 2.6 && !hasStrongTitleIntent) ||
@@ -867,6 +903,7 @@ function assessEducationalFit(data = {}, segments = [], signals = {}) {
     (motivationalMarkers >= 2 && quickPromiseMarkers >= 2 && salesPushMarkers >= 2) ||
     (salesPushMarkers >= 3 && guaranteeMarkers >= 2) ||
     (isCourseOverviewSales && !hasOutcomeSignal) ||
+    isSatiricalEntertainmentReview ||
     ((isSalesHeavy || isSelfHelpMotivational || isAggressiveMarketing || isOverviewWithoutTeachingCore || isSalesLeadWithoutPractice || isCourseOverviewSales || isClearlyEntertainment || isStrongSalesNoTeaching) && !hasEducationalSignal && hardNegativeCount >= 2);
   const educational = !nonEducational && (
     (score >= 6 && mechanicsCount >= 2 && hasEducationalSignal && hasOutcomeSignal && hardNonLearningHits < 3 && titleMediaMarkers === 0) ||
@@ -906,6 +943,7 @@ function assessEducationalFit(data = {}, segments = [], signals = {}) {
   if (isOverviewWithoutTeachingCore) reasons.push("обзорный формат без явной учебной цели и практики");
   if (isSalesLeadWithoutPractice) reasons.push("продвижение курса преобладает над учебной частью");
   if (isCourseOverviewSales) reasons.push("обзор курса с оффером без учебной практики/цели");
+  if (isSatiricalEntertainmentReview) reasons.push("сатирический или развлекательный обзор медиа-контента не является учебным роликом");
   if (sparseEvidence && hasStrongTitleIntent && !exclude) reasons.push("мало текста (описание/субтитры): классификация опирается на сильные маркеры в названии");
   if (uncertainFinal) reasons.push("пограничный случай: нужны дополнительные подтверждения учебной механики");
   if (exclude) reasons.push("не хватает признаков обучающего формата или преобладает медийно-маркетинговая подача");
@@ -1262,7 +1300,11 @@ function buildRisks(scores, flags, data) {
   if (flags.promiseHits > 0) risks.push(["high", "Завышенные обещания", "Найдены формулировки вроде быстрого гарантированного результата. Это снижает доверие к образовательной ценности."]);
   if (flags.salesHits > 0) risks.push(["medium", "Смещение в продажи", "В транскрипте есть маркетинговые маркеры. Проверьте, не подменяется ли обучение мотивацией или оффером."]);
   if (flags.sourceHits === 0) risks.push(["high", "Нет явных источников", "Утверждения не подкреплены источниками, данными или проверяемыми ссылками."]);
-  if (scores.technical < 5) risks.push(["high", "Техническая непригодность", "Суммарная оценка звука, видео и читаемости ниже рабочего порога."]);
+  if (scores.technical < 5 && (flags.mediaAudioMeasured || flags.mediaVideoMeasured)) {
+    risks.push(["high", "Техническая непригодность", "Суммарная оценка звука, видео и читаемости ниже рабочего порога."]);
+  } else if (scores.technical < 5) {
+    risks.push(["medium", "Недостаточно техданных", "Полный медиа-анализ не запускался, поэтому оценка техники предварительная и не должна трактоваться как подтвержденная техническая слабость."]);
+  }
   if (flags.practiceHits === 0) risks.push(["medium", "Мало практики", "Не найдено явных упражнений, заданий или проверок понимания."]);
   if (data.transcript.length < 250) risks.push(["medium", "Недостаточно данных", "Транскрипт короткий, поэтому выводы стоит считать предварительными."]);
   return risks.length ? risks : [["low", "Критических флагов нет", "По текущим данным агент не обнаружил грубых методологических или технических рисков."]];

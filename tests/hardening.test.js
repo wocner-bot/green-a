@@ -292,3 +292,88 @@ test('calculateScores keeps totals finite when manual tech metrics are missing',
   assert.equal(Number.isFinite(weighted), true, 'weighted total should stay finite without manual sliders');
   assert.equal(Number.isFinite(total), true, 'final total should stay finite without manual sliders');
 });
+
+test('Structured school theory lesson scores above entertainment-style promo', () => {
+  const appSource = fs.readFileSync(path.resolve(__dirname, '..', 'app.js'), 'utf8');
+  const constBlock = appSource.slice(0, appSource.indexOf('const els ='));
+
+  const snippet = [
+    constBlock,
+    extractFunctionSource(appSource, 'clamp'),
+    extractFunctionSource(appSource, 'finiteScore'),
+    extractFunctionSource(appSource, 'resolveVideoMetric'),
+    extractFunctionSource(appSource, 'countHits'),
+    extractFunctionSource(appSource, 'regexHits'),
+    extractFunctionSource(appSource, 'uniqueTypes'),
+    extractFunctionSource(appSource, 'visualObservationLines'),
+    extractFunctionSource(appSource, 'calculateScores'),
+    extractFunctionSource(appSource, 'analyzeVideo'),
+    extractFunctionSource(appSource, 'assessEducationalFit'),
+    extractFunctionSource(appSource, 'weightedTotal'),
+    extractFunctionSource(appSource, 'rawWeightedTotal'),
+    extractFunctionSource(appSource, 'majorQualityProfile'),
+    extractFunctionSource(appSource, 'majorQualityCap'),
+    extractFunctionSource(appSource, 'educationalFitCap'),
+    extractFunctionSource(appSource, 'nonEducationalPenaltyTotal'),
+    extractFunctionSource(appSource, 'gradeFor'),
+    extractFunctionSource(appSource, 'buildRisks'),
+    'module.exports = { analyzeVideo };'
+  ].join('\n\n');
+
+  const sandbox = {
+    module: { exports: {} },
+    exports: {},
+    crypto: { randomUUID: () => 'test-id' },
+    state: { segments: [], visualObservations: [] }
+  };
+  vm.createContext(sandbox);
+  vm.runInContext(snippet, sandbox);
+
+  const { analyzeVideo } = sandbox.module.exports;
+
+  const theoryLesson = {
+    title: 'Действительные числа. Теория. Видеоурок 1. Алгебра 10 класс',
+    topic: 'Математика',
+    description: 'Тема сегодняшнего урока – действительные числа. На этом уроке мы узнаем, какие числа называются натуральными, целыми, рациональными, иррациональными и действительными.\n\n0:00 Вступление\n0:17 Натуральные числа\n0:53 Целые числа\n1:30 Рациональные числа\n4:25 Периодическая дробь\n5:50 Иррациональные числа\n7:46 Действительные числа\n8:48 Операции над действительными числами\n9:44 Модуль действительного числа',
+    transcript: 'Привет, меня зовут Елена, и я преподаватель математики. Сегодня наша тема — действительные числа. Сейчас познакомимся с натуральными числами, целыми числами, рациональными числами, периодическими дробями, иррациональными числами и множеством действительных чисел. Разберем определения, примеры и обозначения.',
+    ocr: '',
+    segments: [
+      { time: '00:00-00:17', type: 'теория', note: 'Вступление', source: 'description', topic: 'Вступление', score: 2.1, evidence: 'смысловой фрагмент без явных учебных маркеров' },
+      { time: '00:17-00:53', type: 'теория', note: 'Натуральные числа', source: 'description', topic: 'Натуральные числа', score: 2.1, evidence: 'смысловой фрагмент без явных учебных маркеров' },
+      { time: '00:53-01:30', type: 'теория', note: 'Целые числа', source: 'description', topic: 'Целые числа', score: 2.1, evidence: 'смысловой фрагмент без явных учебных маркеров' },
+      { time: '01:30-04:25', type: 'теория', note: 'Рациональные числа', source: 'description', topic: 'Рациональные числа', score: 2.1, evidence: 'смысловой фрагмент без явных учебных маркеров' },
+      { time: '04:25-05:50', type: 'теория', note: 'Периодическая дробь', source: 'description', topic: 'Периодическая дробь', score: 3.7, evidence: 'понятия/метод' },
+      { time: '05:50-07:46', type: 'теория', note: 'Иррациональные числа', source: 'description', topic: 'Иррациональные числа', score: 2.1, evidence: 'смысловой фрагмент без явных учебных маркеров' },
+      { time: '07:46-09:44', type: 'теория', note: 'Действительные числа', source: 'description', topic: 'Действительные числа', score: 2.1, evidence: 'смысловой фрагмент без явных учебных маркеров' }
+    ],
+    visualObservations: [],
+    mediaAnalysis: {
+      audio: { available: false, score: 8, warnings: ['Медиа-анализ отключен в быстром режиме.'] },
+      video: { available: false, score: 5, readabilityScore: 5, warnings: ['Медиа-анализ отключен в быстром режиме.'] }
+    }
+  };
+
+  const entertainmentPromo = {
+    title: 'Стань AI-экспертом за неделю: мотивационный интенсив',
+    topic: 'AI и машинное обучение',
+    transcript: 'Сегодня я покажу легкий и быстрый путь с нуля до эксперта за неделю. Подпишись, купи курс со скидкой и повторяй мои шаги. Мы не будем углубляться в термины, главное поверить в себя и действовать без усилий.',
+    ocr: 'AI за 7 дней. Скидка. Быстрый результат. Мотивация.',
+    audio: 6,
+    video: 7,
+    slides: 4,
+    pace: 6,
+    segments: [
+      { time: '00:00-00:44', type: 'мотивация', note: 'Обещает быстрый результат без проверки' },
+      { time: '00:44-01:20', type: 'продажа', note: 'Смещение в оффер и подписку' }
+    ],
+    visualObservations: [],
+    mediaAnalysis: null
+  };
+
+  const theoryAnalysis = analyzeVideo(theoryLesson);
+  const promoAnalysis = analyzeVideo(entertainmentPromo);
+
+  assert.equal(theoryAnalysis.educationalFit.classification, 'educational');
+  assert(theoryAnalysis.total >= 55, `Structured school theory lesson should stay above low-score territory, got ${theoryAnalysis.total}`);
+  assert(theoryAnalysis.total - promoAnalysis.total >= 10, `Educational theory lesson should clearly outrank entertainment-style promo, got ${theoryAnalysis.total} vs ${promoAnalysis.total}`);
+});

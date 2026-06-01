@@ -139,3 +139,17 @@ test('Classifies lesson as educational when description has objective and practi
   assert.equal(result.exclude, false, 'Lesson with description objective/practice should not be excluded');
   assert.equal(result.classification, 'educational', 'Lesson with clear description teaching mechanics should be educational');
 });
+
+test('Excludes satirical film review even if transcript contains incidental educational words', () => {
+  const data = {
+    title: '[BadComedian] - РЖАКА С КОЗЛОВСКИМ И ГАЛУСТЯНОМ (Российская комедия в 2026 году)',
+    description: '#BadComedian обзор комедии. Российская комедия про пердеж с Козловским в 2026 году.',
+    transcript: 'Сегодня по сути мы смотрим фильм. Это обзор комедии. В школе у нас не было действительно нужного урока ДНК России. Вместо него мы почему-то думали, что полезно изучать иностранный язык. Но вернемся к сюжету фильма и шуткам про пердеж.'
+  };
+  const result = assessEducationalFit(data, [
+    { time: '00:00-00:50', type: 'обзор', note: 'сатирический разбор фильма' },
+    { time: '00:50-01:40', type: 'пример', note: 'шутки и комментарии автора' }
+  ], {});
+  assert.equal(result.exclude, true, 'Satirical entertainment review should be excluded from educational rating');
+  assert.equal(result.classification, 'non-educational', 'Satirical entertainment review should classify as non-educational');
+});
