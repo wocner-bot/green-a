@@ -231,3 +231,64 @@ test('Educational fit logic in app.js matches lib implementation', () => {
     assert.equal(JSON.stringify(appSummary), JSON.stringify(libSummary));
   }
 });
+
+test('calculateScores keeps totals finite when manual tech metrics are missing', () => {
+  const appSource = fs.readFileSync(path.resolve(__dirname, '..', 'app.js'), 'utf8');
+  const constBlock = appSource.slice(0, appSource.indexOf('const els ='));
+
+  const snippet = [
+    constBlock,
+    extractFunctionSource(appSource, 'clamp'),
+    extractFunctionSource(appSource, 'finiteScore'),
+    extractFunctionSource(appSource, 'resolveVideoMetric'),
+    extractFunctionSource(appSource, 'countHits'),
+    extractFunctionSource(appSource, 'regexHits'),
+    extractFunctionSource(appSource, 'uniqueTypes'),
+    extractFunctionSource(appSource, 'visualObservationLines'),
+    extractFunctionSource(appSource, 'calculateScores'),
+    extractFunctionSource(appSource, 'assessEducationalFit'),
+    extractFunctionSource(appSource, 'weightedTotal'),
+    extractFunctionSource(appSource, 'rawWeightedTotal'),
+    extractFunctionSource(appSource, 'majorQualityProfile'),
+    extractFunctionSource(appSource, 'majorQualityCap'),
+    extractFunctionSource(appSource, 'educationalFitCap'),
+    extractFunctionSource(appSource, 'nonEducationalPenaltyTotal'),
+    'module.exports = { calculateScores, weightedTotal, nonEducationalPenaltyTotal };'
+  ].join('\n\n');
+
+  const sandbox = {
+    module: { exports: {} },
+    exports: {},
+    crypto: { randomUUID: () => 'test-id' },
+    state: { segments: [], visualObservations: [] }
+  };
+  vm.createContext(sandbox);
+  vm.runInContext(snippet, sandbox);
+
+  const { calculateScores, weightedTotal, nonEducationalPenaltyTotal } = sandbox.module.exports;
+  const video = {
+    title: 'Урок SQL: JOIN пошагово',
+    topic: 'Базы данных',
+    description: 'Цель урока: научиться выбирать JOIN под задачу. Пошаговый разбор, пример и практическое задание.',
+    transcript: 'Сначала сформулируем цель урока. Затем разберем пример и дадим практическое задание с проверкой результата.',
+    ocr: 'INNER JOIN, LEFT JOIN, проверка результата',
+    segments: [
+      { time: '00:00-00:40', type: 'теория', note: 'цель урока' },
+      { time: '00:40-01:20', type: 'пример', note: 'разбор запроса' },
+      { time: '01:20-02:10', type: 'практика', note: 'задание и проверка' }
+    ],
+    mediaAnalysis: {
+      audio: { score: 7.4, speechScore: 7.8 },
+      video: { score: 7.2, readabilityScore: 8.1 }
+    }
+  };
+
+  const { scores, flags } = calculateScores(video);
+  const weighted = weightedTotal(scores);
+  const total = flags.educationalFit.exclude ? nonEducationalPenaltyTotal(flags.educationalFit, weighted) : weighted;
+
+  assert.equal(Number.isFinite(scores.technical), true, 'technical score should stay finite without manual sliders');
+  assert.equal(Number.isFinite(scores.communication), true, 'communication score should stay finite without manual sliders');
+  assert.equal(Number.isFinite(weighted), true, 'weighted total should stay finite without manual sliders');
+  assert.equal(Number.isFinite(total), true, 'final total should stay finite without manual sliders');
+});

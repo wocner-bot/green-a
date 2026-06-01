@@ -92,8 +92,8 @@ const state = {
   mediaAnalysis: null
 };
 
-const NON_EDUCATIONAL_MIN_TOTAL = 0;
-const NON_EDUCATIONAL_MAX_TOTAL = 20;
+const NON_EDUCATIONAL_MIN_TOTAL = 26;
+const NON_EDUCATIONAL_MAX_TOTAL = 54;
 
 const els = {
   videoUrl: document.querySelector("#videoUrl"),
@@ -140,6 +140,20 @@ function clamp(value, min = 0, max = 10) {
   return Math.max(min, Math.min(max, value));
 }
 
+function finiteScore(value, fallback = 0) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? clamp(numeric) : fallback;
+}
+
+function resolveVideoMetric(video, key, fallback) {
+  const media = video?.mediaAnalysis || {};
+  if (key === "audio") return finiteScore(video?.audio, finiteScore(media.audio?.score, fallback));
+  if (key === "video") return finiteScore(video?.video, finiteScore(media.video?.score, fallback));
+  if (key === "slides") return finiteScore(video?.slides, finiteScore(media.video?.readabilityScore ?? media.video?.score, fallback));
+  if (key === "pace") return finiteScore(video?.pace, finiteScore(media.audio?.speechScore ?? media.audio?.score, fallback));
+  return finiteScore(video?.[key], fallback);
+}
+
 function countHits(text, words) {
   const haystack = text.toLowerCase();
   return words.reduce((sum, word) => sum + (haystack.includes(word) ? 1 : 0), 0);
@@ -168,10 +182,10 @@ function getInputs() {
     transcript,
     ocr,
     combined,
-    audio: Number(els.audioQuality.value),
-    video: Number(els.videoQuality.value),
-    slides: Number(els.slideReadability.value),
-    pace: Number(els.speechPace.value)
+    audio: finiteScore(els.audioQuality.value, 7),
+    video: finiteScore(els.videoQuality.value, 7),
+    slides: finiteScore(els.slideReadability.value, 6),
+    pace: finiteScore(els.speechPace.value, 8)
   };
 }
 
@@ -561,10 +575,10 @@ function calculateScores(video = null) {
         transcript: (video.transcript || "").trim(),
         ocr: (video.ocr || "").trim(),
         combined: `${video.title || ""}\n${video.topic || ""}\n${video.description || ""}\n${video.transcript || ""}\n${video.ocr || ""}\n${visualText}`,
-        audio: Number(video.audio),
-        video: Number(video.video),
-        slides: Number(video.slides),
-        pace: Number(video.pace)
+        audio: resolveVideoMetric(video, "audio", 7),
+        video: resolveVideoMetric(video, "video", 7),
+        slides: resolveVideoMetric(video, "slides", 6),
+        pace: resolveVideoMetric(video, "pace", 8)
       }
     : { ...inputData, combined: `${inputData.combined}\n${visualText}` };
   const segments = video ? video.segments : state.segments;
@@ -628,16 +642,14 @@ function calculateScores(video = null) {
     communication: clamp((data.pace * 0.45) + (data.audio * 0.22) + structureHits * 0.25 + (visualObservations.length ? 0.35 : 0) + 1.2)
   };
   scores.educationalFitScore = educationalFit.score;
-  if (educationalFit.exclude) {
-    for (const scale of scales) scores[scale.id] = 0;
-  }
 
   return { scores, data, flags: { salesHits, promiseHits, sourceHits, practiceHits, textLength, educationalFit, segmentQuality, visualQuality, visualObservationCount: visualObservations.length, visualFallbackActive } };
 }
 
 function analyzeVideo(video) {
   const { scores, flags, data } = calculateScores(video);
-  const total = flags.educationalFit.exclude ? nonEducationalPenaltyTotal(flags.educationalFit) : weightedTotal(scores);
+  const baseTotal = weightedTotal(scores);
+  const total = flags.educationalFit.exclude ? nonEducationalPenaltyTotal(flags.educationalFit, baseTotal) : baseTotal;
   const risks = buildRisks(scores, flags, data);
   return {
     ...video,
@@ -650,7 +662,7 @@ function analyzeVideo(video) {
   };
 }
 
-function nonEducationalPenaltyTotal(fit = {}) {
+function nonEducationalPenaltyTotal(fit = {}, baseTotal = null) {
   const markers = fit.markers || {};
   const hardNonLearningHits = Number(markers.hardNonLearningHits || 0);
   const titleMediaMarkers = Number(markers.titleMediaMarkers || 0);
@@ -661,18 +673,21 @@ function nonEducationalPenaltyTotal(fit = {}) {
   const educationalSignal = Number(fit.score || 0);
   const learningEvidence = Number(fit.learningEvidence || 0);
   const reasonsCount = Array.isArray(fit.reasons) ? fit.reasons.length : 0;
+  const baseline = Number.isFinite(baseTotal)
+    ? Number(baseTotal)
+    : Math.round(30 + educationalSignal * 3 + Math.min(learningEvidence, 4) * 2);
 
   const raw = (
-    6
-    + educationalSignal * 1.3
-    + Math.min(learningEvidence, 4) * 1.0
+    baseline * 0.55
+    + educationalSignal * 2.0
+    + Math.min(learningEvidence, 4) * 1.4
     - hardNonLearningHits * 3.5
     - titleMediaMarkers * 4.5
     - motivationalMarkers * 2.0
     - quickPromiseMarkers * 2.3
     - salesPushMarkers * 2.6
     - guaranteeMarkers * 2.2
-    - Math.max(0, reasonsCount - 1) * 0.8
+    - Math.max(0, reasonsCount - 1) * 0.6
   );
 
   return Math.max(NON_EDUCATIONAL_MIN_TOTAL, Math.min(NON_EDUCATIONAL_MAX_TOTAL, Math.round(raw)));
@@ -789,6 +804,13 @@ function assessEducationalFit(data = {}, segments = [], signals = {}) {
   const hasEducationalSignal = hasStrongTeachingCore || (hasEducationalIntent && hasEducationalMechanics && mechanicsCount >= 1);
   const hasStrongTitleIntent = titleEducationHits >= 1 || titleTeachingHits >= 1 || hasHowToTitle || hasFromScratchTitle;
   const hasBaselineTeachingEvidence = totalTeachingEvidence >= 2 || (hasStrongTitleIntent && (subjectMatterHits > 0 || mechanicsCount >= 1));
+  const hasRescueTeachingPattern = hasStrongTitleIntent &&
+    (descriptionTeachingHits >= 1 || transcriptTeachingHits >= 1 || hasCourseLikeStructure || hasLearningSegments) &&
+    (hasOutcomeSignal || mechanicsCount >= 1) &&
+    hardNonLearningHits < 2 &&
+    titleMediaMarkers === 0 &&
+    talkFormatHits === 0 &&
+    salesPushMarkers < 3;
 
   const learningEvidence = [hasInstructionalFormat, hasMethod, hasPractice, hasGoal, hasChapterStructure || hasCaptionStructure || hasSegmentedLearningFlow, mechanicsCount >= 2].filter(Boolean).length;
 
@@ -837,15 +859,15 @@ function assessEducationalFit(data = {}, segments = [], signals = {}) {
 
   const nonEducational = (score < 2.6 && !hasStrongTitleIntent) ||
     ((talkShowTitle || talkFormatHits > 0) && !explicitEducationalTitle && !hasEducationalMechanics) ||
-    (!hasEducationalSignal && totalTeachingEvidence <= 1 && hardNonLearningHits >= 1) ||
-    (!hasStrongTeachingCore && score < 4.2 && (isOverviewWithoutTeachingCore || hardNonLearningHits > 0 || learningEvidence <= 1)) ||
+    (!hasEducationalSignal && totalTeachingEvidence <= 1 && hardNonLearningHits >= 2) ||
+    (!hasStrongTeachingCore && score < 4.2 && (isOverviewWithoutTeachingCore || hardNonLearningHits > 1 || learningEvidence === 0)) ||
     ((hardNonLearningHits >= 3 && titleMediaMarkers > 0) && !hasChapterStructure) ||
     ((hardNonLearningHits >= 3 || titleMediaMarkers > 0) && !hasOutcomeSignal && !hasStrongTeachingCore) ||
     (noTeachingMechanism && learningEvidence <= 1 && (hardNonLearningHits >= 2 || hardNegativeCount >= 2)) ||
     (motivationalMarkers >= 2 && quickPromiseMarkers >= 2 && salesPushMarkers >= 2) ||
     (salesPushMarkers >= 3 && guaranteeMarkers >= 2) ||
     (isCourseOverviewSales && !hasOutcomeSignal) ||
-    ((isSalesHeavy || isSelfHelpMotivational || isAggressiveMarketing || isOverviewWithoutTeachingCore || isSalesLeadWithoutPractice || isCourseOverviewSales || isClearlyEntertainment || isStrongSalesNoTeaching) && !hasEducationalSignal);
+    ((isSalesHeavy || isSelfHelpMotivational || isAggressiveMarketing || isOverviewWithoutTeachingCore || isSalesLeadWithoutPractice || isCourseOverviewSales || isClearlyEntertainment || isStrongSalesNoTeaching) && !hasEducationalSignal && hardNegativeCount >= 2);
   const educational = !nonEducational && (
     (score >= 6 && mechanicsCount >= 2 && hasEducationalSignal && hasOutcomeSignal && hardNonLearningHits < 3 && titleMediaMarkers === 0) ||
     (score >= 5.2 && titleTeachingHits >= 1 && descriptionTeachingHits >= 2 && hardNonLearningHits < 3 && !isSalesHeavy) ||
@@ -856,7 +878,9 @@ function assessEducationalFit(data = {}, segments = [], signals = {}) {
     !educational ||
     (sparseEvidence && hardNegativeCount <= 1)
   );
-  const nonEducationalFinal = nonEducational && !(sparseEvidence && hasStrongTitleIntent && hardNegativeCount <= 1);
+  const nonEducationalFinal = nonEducational &&
+    !hasRescueTeachingPattern &&
+    !(sparseEvidence && hasStrongTitleIntent && hardNegativeCount <= 1);
   const educationalFinal = !nonEducationalFinal && educational;
   const uncertainFinal = !nonEducationalFinal && !educationalFinal;
   const exclude = nonEducationalFinal;
@@ -1216,8 +1240,10 @@ function renderAudience(scores, flags, data) {
 
 function buildRisks(scores, flags, data) {
   const risks = [];
+  const baseTotal = weightedTotal(scores);
   if (flags.educationalFit.exclude) {
-    risks.push(["high", "Не классифицировано как обучающее видео", `По описанию и содержанию не хватает учебной механики: цели, шагов, практики или проверки понимания. Выставлен штрафной рейтинг ${nonEducationalPenaltyTotal(flags.educationalFit)} из диапазона ${NON_EDUCATIONAL_MIN_TOTAL}-${NON_EDUCATIONAL_MAX_TOTAL}. ${flags.educationalFit.reasons.join("; ")}.`]);
+    const adjusted = nonEducationalPenaltyTotal(flags.educationalFit, baseTotal);
+    risks.push(["high", "Не классифицировано как обучающее видео", `По описанию и содержанию не хватает учебной механики: цели, шагов, практики или проверки понимания. Итог понижен с ${baseTotal} до ${adjusted} (диапазон ${NON_EDUCATIONAL_MIN_TOTAL}-${NON_EDUCATIONAL_MAX_TOTAL} для не-обучающих роликов). ${flags.educationalFit.reasons.join("; ")}.`]);
   }
   if (flags.educationalFit.weak) risks.push(["medium", "Пограничный обучающий формат", `Видео частично похоже на обучающее, но признаков учебной механики пока недостаточно для высокой уверенности. Оценка формата: ${flags.educationalFit.score}/10.`]);
   const majorProfile = majorQualityProfile(scores);
@@ -1257,12 +1283,14 @@ function renderRisks(risks) {
 }
 
 function renderEvidence(scores, flags = null) {
+  const baseTotal = weightedTotal(scores);
   const rows = state.segments.slice(0, 6).map((segment) => {
     const note = segment.note || "Сегмент учтен в общей структуре, но требует ручного наблюдения.";
     return [`${segment.time} · ${segment.type}`, note];
   });
   if (flags?.educationalFit?.exclude) {
-    rows.push(["Классификация", `Видео не прошло критерии обучающего формата, поэтому ему присвоен штрафной рейтинг ${nonEducationalPenaltyTotal(flags.educationalFit)} (${NON_EDUCATIONAL_MIN_TOTAL}-${NON_EDUCATIONAL_MAX_TOTAL}). Причины: ${flags.educationalFit.reasons.join("; ")}.`]);
+    const adjusted = nonEducationalPenaltyTotal(flags.educationalFit, baseTotal);
+    rows.push(["Классификация", `Видео не прошло критерии обучающего формата, поэтому итог понижен с ${baseTotal} до ${adjusted} (${NON_EDUCATIONAL_MIN_TOTAL}-${NON_EDUCATIONAL_MAX_TOTAL} для не-обучающего формата). Причины: ${flags.educationalFit.reasons.join("; ")}.`]);
   } else if (flags?.educationalFit?.weak) {
     rows.push(["Классификация", `Видео отмечено как погранично обучающее. Оценка формата: ${flags.educationalFit.score}/10. Причины: ${flags.educationalFit.reasons.join("; ")}.`]);
   }
@@ -1287,6 +1315,9 @@ function renderEvidence(scores, flags = null) {
 
 function buildRatingPrompt(video, scores, flags, risks) {
   const topicInfo = video.topicClassification || classifyTopic(video);
+  const baseTotal = weightedTotal(scores);
+  const currentTotal = flags.educationalFit.exclude ? nonEducationalPenaltyTotal(flags.educationalFit, baseTotal) : baseTotal;
+  const currentGrade = gradeFor(currentTotal);
   const scaleLines = scales.map((scale) => {
     const score = scores[scale.id]?.toFixed ? scores[scale.id].toFixed(1) : scores[scale.id];
     return `- ${scale.label}: вес ${scale.weight}%, текущая оценка ${score}/10`;
@@ -1318,8 +1349,8 @@ URL: ${video.url}
 Режим анализа: ${els.analysisMode.value}
 
 ТЕКУЩИЙ РАСЧЕТ:
-Итог: ${flags.educationalFit.exclude ? nonEducationalPenaltyTotal(flags.educationalFit) : weightedTotal(scores)}
-Класс: ${gradeFor(flags.educationalFit.exclude ? nonEducationalPenaltyTotal(flags.educationalFit) : weightedTotal(scores))}
+Итог: ${currentTotal}
+Класс: ${currentGrade}
 Оценка обучающего формата: ${flags.educationalFit.score}/10
 Причины классификации: ${flags.educationalFit.reasons.join("; ")}
 
@@ -1418,7 +1449,8 @@ function exportRatingData() {
   }
   const video = currentVideoPayload();
   const { scores, flags, data } = calculateScores();
-  const total = flags.educationalFit.exclude ? nonEducationalPenaltyTotal(flags.educationalFit) : weightedTotal(scores);
+  const baseTotal = weightedTotal(scores);
+  const total = flags.educationalFit.exclude ? nonEducationalPenaltyTotal(flags.educationalFit, baseTotal) : baseTotal;
   const grade = gradeFor(total);
   const risks = buildRisks(scores, flags, data);
   const timecodeIssues = validateTimecodes();
@@ -1585,7 +1617,8 @@ function exportRatingData() {
 
 function currentAnalysis() {
   const { scores, flags } = calculateScores();
-  const total = flags.educationalFit.exclude ? nonEducationalPenaltyTotal(flags.educationalFit) : weightedTotal(scores);
+  const baseTotal = weightedTotal(scores);
+  const total = flags.educationalFit.exclude ? nonEducationalPenaltyTotal(flags.educationalFit, baseTotal) : baseTotal;
   const draft = currentVideoPayload();
   const topicInfo = draft.topicClassification || classifyTopic(draft);
   return {
@@ -1997,13 +2030,14 @@ function update() {
   }
   const { scores, flags, data } = calculateScores();
   const isExcluded = flags.educationalFit.exclude;
-  const total = isExcluded ? nonEducationalPenaltyTotal(flags.educationalFit) : weightedTotal(scores);
+  const baseTotal = weightedTotal(scores);
+  const total = isExcluded ? nonEducationalPenaltyTotal(flags.educationalFit, baseTotal) : baseTotal;
   const grade = gradeFor(total);
   els.score.textContent = total;
   els.grade.textContent = grade;
   els.ratingSummary.textContent = !isExcluded
     ? [summaryFor(total), flags.educationalFit.weak ? `Пограничный обучающий формат: уверенность ${flags.educationalFit.confidence || "low"}, оценка ${flags.educationalFit.score}/10.` : "", ratingCapNote(scores)].filter(Boolean).join(" ")
-    : `Ролик не прошел критерии обучающего формата, поэтому по методике ему присвоен штрафной рейтинг ${total} (диапазон ${NON_EDUCATIONAL_MIN_TOTAL}-${NON_EDUCATIONAL_MAX_TOTAL}). Причины: ${flags.educationalFit.reasons.join("; ")}.`;
+    : `Ролик не прошел критерии обучающего формата, поэтому итог понижен до ${total} (диапазон ${NON_EDUCATIONAL_MIN_TOTAL}-${NON_EDUCATIONAL_MAX_TOTAL} для не-обучающих роликов). Причины: ${flags.educationalFit.reasons.join("; ")}.`;
 
   els.transcriptView.textContent = data.transcript.trim() || "Транскрипт отсутствует.";
   const visualLines = visualObservationLines(state.visualObservations).join("\n");
