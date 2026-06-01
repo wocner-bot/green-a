@@ -107,7 +107,7 @@ Optional:
 
 ```text
 YOUTUBE_API_KEY=...
-VIDEO_ANALYSIS_PROVIDER=local|azure
+VIDEO_ANALYSIS_PROVIDER=local|azure|hybrid
 AZURE_VIDEO_INDEXER_ACCOUNT_ID=...
 AZURE_VIDEO_INDEXER_LOCATION=...
 AZURE_VIDEO_INDEXER_ACCESS_TOKEN=...
@@ -124,6 +124,7 @@ The backend can run deeper media analysis when the host has the required command
 - `yt-dlp` for resolving real YouTube audio/video stream URLs when the public page HTML does not expose direct streams;
 - `tesseract` with English/Russian language packs for OCR on sampled video frames.
 - Optional: Azure AI Video Indexer as OCR provider (`VIDEO_ANALYSIS_PROVIDER=azure`) with automatic fallback to local OCR if Azure is unavailable.
+- Hybrid OCR mode (`VIDEO_ANALYSIS_PROVIDER=hybrid`): runs Azure Video Indexer and local `tesseract`, then merges OCR signals for higher recall.
 
 On Render, `packages.txt` asks the platform to install:
 

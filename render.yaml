@@ -14,7 +14,7 @@ services:
       - key: YOUTUBE_API_KEY
         sync: false
       - key: VIDEO_ANALYSIS_PROVIDER
-        value: local
+        value: hybrid
       - key: AZURE_VIDEO_INDEXER_ACCOUNT_ID
         sync: false
       - key: AZURE_VIDEO_INDEXER_LOCATION

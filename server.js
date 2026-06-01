@@ -932,7 +932,8 @@ async function analyzeMediaStreams({ audioUrl, videoUrl, pageUrl, title, duratio
     analyzeAudioStream(audioUrl, duration, cues, audioHeaders),
     analyzeVideoStream(videoUrl, duration, videoHeaders)
   ]);
-  let ocr = await extractFrameOcr(videoUrl, segments, duration, videoHeaders, pageUrl);
+  const localOcr = await extractFrameOcr(videoUrl, segments, duration, videoHeaders, pageUrl);
+  let ocr = localOcr;
   if (canUseAzureVideoIndexer(mode)) {
     try {
       const azureOcr = await analyzeOcrViaAzureVideoIndexer({
@@ -940,20 +941,85 @@ async function analyzeMediaStreams({ audioUrl, videoUrl, pageUrl, title, duratio
         directVideoUrl: videoUrl,
         title
       });
-      const localWarnings = ocr.available ? [] : (ocr.warnings || []);
-      ocr = {
-        ...azureOcr,
-        warnings: [...localWarnings, ...(azureOcr.warnings || [])],
-        source: "azure-video-indexer"
-      };
+      if (videoAnalysisProvider === "hybrid") {
+        ocr = mergeOcrResults(localOcr, {
+          ...azureOcr,
+          source: "azure-video-indexer"
+        });
+      } else {
+        const localWarnings = localOcr.available ? [] : (localOcr.warnings || []);
+        ocr = {
+          ...azureOcr,
+          warnings: uniqueWarnings([...localWarnings, ...(azureOcr.warnings || [])]),
+          source: "azure-video-indexer"
+        };
+      }
     } catch (error) {
-      ocr = {
-        ...ocr,
-        warnings: [`Azure Video Indexer OCR недоступен: ${error.message}`, ...(ocr.warnings || [])]
-      };
+      if (videoAnalysisProvider === "hybrid") {
+        ocr = mergeOcrResults(localOcr, {
+          available: false,
+          frames: [],
+          text: "",
+          warnings: [`Azure Video Indexer OCR недоступен: ${error.message}`],
+          source: "azure-video-indexer"
+        });
+      } else {
+        ocr = {
+          ...localOcr,
+          warnings: uniqueWarnings([`Azure Video Indexer OCR недоступен: ${error.message}`, ...(localOcr.warnings || [])])
+        };
+      }
     }
   }
   return { audio, video, ocr };
+}
+
+function uniqueWarnings(warnings = []) {
+  return [...new Set(warnings.filter(Boolean).map((item) => String(item).trim()).filter(Boolean))];
+}
+
+function mergeOcrResults(localOcr = {}, azureOcr = {}) {
+  const localFrames = Array.isArray(localOcr.frames) ? localOcr.frames : [];
+  const azureFrames = Array.isArray(azureOcr.frames) ? azureOcr.frames : [];
+  const mergedFrameMap = new Map();
+
+  for (const frame of [...azureFrames, ...localFrames]) {
+    const time = String(frame?.time || "").trim();
+    const text = cleanSegmentText(frame?.text || "").slice(0, 700);
+    if (!time && !text) continue;
+    const key = `${time}|${text.toLowerCase()}`;
+    if (mergedFrameMap.has(key)) continue;
+    mergedFrameMap.set(key, {
+      time,
+      text,
+      hasText: Boolean(text && text.length > 8),
+      source: frame?.source || (azureFrames.includes(frame) ? "azure-video-indexer" : "local-tesseract")
+    });
+  }
+
+  const mergedFrames = [...mergedFrameMap.values()].slice(0, 18);
+  const mergedTextMap = new Map();
+  for (const frame of mergedFrames) {
+    const text = cleanSegmentText(frame.text);
+    if (!text) continue;
+    const key = text.toLowerCase();
+    if (!mergedTextMap.has(key)) mergedTextMap.set(key, text);
+  }
+  const mergedText = [...mergedTextMap.values()].join("\n");
+  const mergedWarnings = uniqueWarnings([...(azureOcr.warnings || []), ...(localOcr.warnings || [])]);
+  const azureAvailable = Boolean(azureOcr.available);
+  const localAvailable = Boolean(localOcr.available);
+  const source = azureAvailable && localAvailable
+    ? "hybrid-azure-local"
+    : (azureAvailable ? "azure-video-indexer" : "local-tesseract");
+
+  return {
+    available: azureAvailable || localAvailable || mergedFrames.some((frame) => frame.hasText),
+    frames: mergedFrames,
+    text: mergedText,
+    warnings: mergedWarnings,
+    source
+  };
 }
 
 async function detectSceneSegments(streamUrl, duration, headers = {}) {
@@ -1248,7 +1314,7 @@ function parseVideoIndexerTime(value) {
 
 function canUseAzureVideoIndexer(mode) {
   if (mode !== "stream") return false;
-  if (videoAnalysisProvider !== "azure") return false;
+  if (!["azure", "hybrid"].includes(videoAnalysisProvider)) return false;
   return Boolean(
     azureVideoIndexerConfig.accountId &&
     azureVideoIndexerConfig.location &&
@@ -1840,7 +1906,9 @@ async function analyzeYouTube(inputUrl, mode = "stream") {
     audioHeaders,
     videoHeaders
   });
-  const ocrProvider = mediaAnalysis.ocr?.source === "azure-video-indexer" ? "azure-video-indexer" : "local";
+  const ocrProvider = mediaAnalysis.ocr?.source === "hybrid-azure-local"
+    ? "hybrid"
+    : (mediaAnalysis.ocr?.source === "azure-video-indexer" ? "azure-video-indexer" : "local");
   const visualObservations = buildVisualObservations({ segments, description, transcript, thumbnail, mediaAnalysis });
   const signals = [
     "название и описание страницы YouTube",
@@ -1855,7 +1923,9 @@ async function analyzeYouTube(inputUrl, mode = "stream") {
     mediaAnalysis.ocr?.available
       ? (ocrProvider === "azure-video-indexer"
         ? "OCR текста на кадрах выполнен через Azure AI Video Indexer"
-        : "OCR текста на кадрах выполнен через tesseract")
+        : (ocrProvider === "hybrid"
+          ? "OCR текста на кадрах выполнен в гибридном режиме: Azure AI Video Indexer + локальный tesseract"
+          : "OCR текста на кадрах выполнен через tesseract"))
       : "",
     visualObservations.length ? "визуальные наблюдения добавлены в пакет рейтингования" : "",
     !transcript && visualObservations.length ? "включен fallback: оценка может опираться на экран и визуальные действия" : "",
@@ -1885,7 +1955,9 @@ async function analyzeYouTube(inputUrl, mode = "stream") {
     mediaAnalysis.ocr?.available
       ? (ocrProvider === "azure-video-indexer"
         ? "OCR кадров выполнен через Azure AI Video Indexer; точность зависит от качества видео и статуса облачной обработки"
-        : "OCR кадров выполнен локальным движком и может ошибаться на мелком, размытом или декоративном тексте")
+        : (ocrProvider === "hybrid"
+          ? "OCR кадров выполнен в гибридном режиме (Azure + локальный OCR): выше полнота, но возможны дубли и шум."
+          : "OCR кадров выполнен локальным движком и может ошибаться на мелком, размытом или декоративном тексте"))
       : mode !== "stream"
         ? "OCR кадров отключен в быстром режиме"
         : /tesseract не установлен/i.test(ocrWarningText)
