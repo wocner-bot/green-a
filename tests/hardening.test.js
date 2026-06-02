@@ -169,6 +169,94 @@ test('No hardcoded YouTube API key in server source', () => {
   assert.equal(/AIza[0-9A-Za-z_-]{10,}/.test(source), false, 'Server source must not embed raw API keys');
 });
 
+test('Qwen-VL result normalization keeps visual teaching signals structured', () => {
+  const serverSource = fs.readFileSync(path.resolve(__dirname, '..', 'server.js'), 'utf8');
+  const snippet = [
+    extractFunctionSource(serverSource, 'clamp'),
+    extractFunctionSource(serverSource, 'cleanSegmentText'),
+    extractFunctionSource(serverSource, 'uniqueWarnings'),
+    extractFunctionSource(serverSource, 'cleanStringArray'),
+    extractFunctionSource(serverSource, 'normalizeQwenVlResult'),
+    'module.exports = { normalizeQwenVlResult };'
+  ].join('\n\n');
+
+  const sandbox = { module: { exports: {} }, exports: {} };
+  vm.createContext(sandbox);
+  vm.runInContext(snippet, sandbox);
+
+  const { normalizeQwenVlResult } = sandbox.module.exports;
+  const result = normalizeQwenVlResult({
+    has_visual_teaching: true,
+    screen_type: 'slides',
+    visible_text: ['Step 1: Revenue formula', 'Example dashboard'],
+    educational_visual_signals: ['charts', 'step_by_step', 'charts'],
+    entertainment_visual_signals: ['vlog'],
+    visual_learning_score: 8.8,
+    confidence: 0.82,
+    summary: 'Frames show slides with structured examples.'
+  }, { model: 'qwen3-vl-plus', framesAnalyzed: 8 });
+
+  assert.equal(result.available, true);
+  assert.equal(result.provider, 'qwen-vl');
+  assert.equal(result.model, 'qwen3-vl-plus');
+  assert.equal(result.framesAnalyzed, 8);
+  assert.equal(result.screenType, 'slides');
+  assert.equal(result.visualLearningScore, 8.8);
+  assert.equal(result.confidence, 0.82);
+  assert.equal(JSON.stringify(result.visibleText), JSON.stringify(['Step 1: Revenue formula', 'Example dashboard']));
+  assert.equal(JSON.stringify(result.educationalSignals), JSON.stringify(['charts', 'step_by_step']));
+  assert.equal(JSON.stringify(result.negativeSignals), JSON.stringify(['vlog']));
+  assert.equal(result.summary, 'Frames show slides with structured examples.');
+  assert.equal(JSON.stringify(result.warnings), JSON.stringify([]));
+});
+
+test('Qwen-VL visual understanding merges into OCR fallback text without losing local OCR', () => {
+  const serverSource = fs.readFileSync(path.resolve(__dirname, '..', 'server.js'), 'utf8');
+  const snippet = [
+    extractFunctionSource(serverSource, 'cleanSegmentText'),
+    extractFunctionSource(serverSource, 'uniqueWarnings'),
+    extractFunctionSource(serverSource, 'qwenVisualSummaryText'),
+    extractFunctionSource(serverSource, 'mergeVisualUnderstandingIntoOcr'),
+    'module.exports = { mergeVisualUnderstandingIntoOcr };'
+  ].join('\n\n');
+
+  const sandbox = { module: { exports: {} }, exports: {} };
+  vm.createContext(sandbox);
+  vm.runInContext(snippet, sandbox);
+
+  const { mergeVisualUnderstandingIntoOcr } = sandbox.module.exports;
+  const ocr = mergeVisualUnderstandingIntoOcr(
+    {
+      available: true,
+      frames: [{ time: '00:20', text: 'Local OCR text', hasText: true, source: 'local-tesseract' }],
+      text: 'Local OCR text',
+      warnings: [],
+      source: 'local-tesseract'
+    },
+    {
+      available: true,
+      provider: 'qwen-vl',
+      model: 'qwen3-vl-plus',
+      framesAnalyzed: 4,
+      screenType: 'code',
+      visualLearningScore: 9,
+      visibleText: ['function calculateScore()'],
+      educationalSignals: ['code', 'step_by_step'],
+      negativeSignals: [],
+      summary: 'Frames show code walkthrough.',
+      warnings: []
+    }
+  );
+
+  assert.equal(ocr.available, true);
+  assert.equal(ocr.source, 'hybrid-qwen-local');
+  assert.match(ocr.text, /Local OCR text/);
+  assert.match(ocr.text, /Qwen-VL визуальный анализ/);
+  assert.match(ocr.text, /function calculateScore/);
+  assert.equal(ocr.frames.length, 2);
+  assert.equal(ocr.frames[1].source, 'qwen-vl');
+});
+
 test('Educational fit logic in app.js matches lib implementation', () => {
   const appSource = fs.readFileSync(path.resolve(__dirname, '..', 'app.js'), 'utf8');
   const { assessEducationalFit: assessFromLib } = require('../lib/educationalFit.js');

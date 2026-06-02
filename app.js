@@ -481,6 +481,10 @@ function mediaAnalysisLines(media = null) {
   if (media.ocr) {
     rows.push(`OCR кадров: ${media.ocr.available ? "текст распознан" : "недоступен"}; кадров ${media.ocr.frames?.length || 0}. ${(media.ocr.warnings || []).join(" ")}`);
   }
+  if (media.visualUnderstanding) {
+    const visual = media.visualUnderstanding;
+    rows.push(`Vision: ${visual.available ? "Qwen-VL проанализировал кадры" : "недоступно"}; provider ${visual.provider || "local"}; модель ${visual.model || "н/д"}; кадров ${visual.framesAnalyzed || 0}; тип ${visual.screenType || "unknown"}; visual learning ${visual.visualLearningScore ?? 0}/10. ${visual.summary || ""} ${(visual.warnings || []).join(" ")}`);
+  }
   return rows.filter((row) => row.trim());
 }
 
@@ -542,7 +546,8 @@ async function fetchYouTubeData() {
     const mediaParts = [
       payload.source?.audioAnalyzed ? "аудио" : "",
       payload.source?.videoAnalyzed ? "видео" : "",
-      payload.source?.ocrAnalyzed ? "OCR" : ""
+      payload.source?.ocrAnalyzed ? "OCR" : "",
+      payload.source?.visionAnalyzed ? "vision" : ""
     ].filter(Boolean);
     const mediaMessage = mediaParts.length ? `, медиа-анализ: ${mediaParts.join(" + ")}` : "";
     const visualMessage = payload.visualObservations?.length ? `, визуальных наблюдений: ${payload.visualObservations.length}` : "";
@@ -1603,7 +1608,19 @@ function exportRatingData() {
         ["ocr", "available", Boolean(video.mediaAnalysis?.ocr?.available)],
         ["ocr", "frames", video.mediaAnalysis?.ocr?.frames?.length || 0],
         ["ocr", "text", video.mediaAnalysis?.ocr?.text || ""],
-        ["ocr", "warnings", (video.mediaAnalysis?.ocr?.warnings || []).join("; ")]
+        ["ocr", "warnings", (video.mediaAnalysis?.ocr?.warnings || []).join("; ")],
+        ["vision", "available", Boolean(video.mediaAnalysis?.visualUnderstanding?.available)],
+        ["vision", "provider", video.mediaAnalysis?.visualUnderstanding?.provider || ""],
+        ["vision", "model", video.mediaAnalysis?.visualUnderstanding?.model || ""],
+        ["vision", "framesAnalyzed", video.mediaAnalysis?.visualUnderstanding?.framesAnalyzed || 0],
+        ["vision", "screenType", video.mediaAnalysis?.visualUnderstanding?.screenType || ""],
+        ["vision", "visualLearningScore", video.mediaAnalysis?.visualUnderstanding?.visualLearningScore ?? ""],
+        ["vision", "confidence", video.mediaAnalysis?.visualUnderstanding?.confidence ?? ""],
+        ["vision", "visibleText", (video.mediaAnalysis?.visualUnderstanding?.visibleText || []).join("; ")],
+        ["vision", "educationalSignals", (video.mediaAnalysis?.visualUnderstanding?.educationalSignals || []).join("; ")],
+        ["vision", "negativeSignals", (video.mediaAnalysis?.visualUnderstanding?.negativeSignals || []).join("; ")],
+        ["vision", "summary", video.mediaAnalysis?.visualUnderstanding?.summary || ""],
+        ["vision", "warnings", (video.mediaAnalysis?.visualUnderstanding?.warnings || []).join("; ")]
       ]
     },
     {

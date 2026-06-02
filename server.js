@@ -10,10 +10,17 @@ const port = Number(process.env.PORT || 8787);
 const host = process.env.HOST || "0.0.0.0";
 const youtubeApiKey = String(process.env.YOUTUBE_API_KEY || "").trim();
 const videoAnalysisProvider = String(process.env.VIDEO_ANALYSIS_PROVIDER || "local").trim().toLowerCase();
+const visionAnalysisProvider = String(process.env.VISION_ANALYSIS_PROVIDER || "local").trim().toLowerCase();
 
 function envInt(name, fallback) {
   const value = Number(process.env[name]);
   return Number.isFinite(value) && value > 0 ? Math.round(value) : fallback;
+}
+
+function clamp(value, min, max) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return min;
+  return Math.min(max, Math.max(min, number));
 }
 
 const azureVideoIndexerConfig = {
@@ -26,6 +33,16 @@ const azureVideoIndexerConfig = {
   pollIntervalMs: envInt("AZURE_VIDEO_INDEXER_POLL_MS", 7000),
   maxPolls: envInt("AZURE_VIDEO_INDEXER_MAX_POLLS", 22),
   timeoutMs: envInt("AZURE_VIDEO_INDEXER_TIMEOUT_MS", 30000)
+};
+
+const qwenVlConfig = {
+  apiKey: String(process.env.QWEN_VL_API_KEY || process.env.DASHSCOPE_API_KEY || "").trim(),
+  baseUrl: String(process.env.QWEN_VL_BASE_URL || "https://dashscope-intl.aliyuncs.com/compatible-mode/v1").replace(/\/+$/, ""),
+  model: String(process.env.QWEN_VL_MODEL || "qwen3-vl-plus").trim(),
+  maxFrames: envInt("QWEN_VL_MAX_FRAMES", 8),
+  timeoutMs: envInt("QWEN_VL_TIMEOUT_MS", 30000),
+  maxImageWidth: envInt("QWEN_VL_MAX_IMAGE_WIDTH", 1280),
+  minSceneGapSeconds: envInt("QWEN_VL_MIN_SCENE_GAP_SECONDS", 20)
 };
 
 const mime = {
@@ -934,6 +951,20 @@ async function analyzeMediaStreams({ audioUrl, videoUrl, pageUrl, title, duratio
   ]);
   const localOcr = await extractFrameOcr(videoUrl, segments, duration, videoHeaders, pageUrl);
   let ocr = localOcr;
+  let visualUnderstanding = {
+    available: false,
+    provider: "local",
+    model: "",
+    framesAnalyzed: 0,
+    screenType: "unknown",
+    visualLearningScore: 0,
+    confidence: 0,
+    visibleText: [],
+    educationalSignals: [],
+    negativeSignals: [],
+    summary: "",
+    warnings: []
+  };
   if (canUseAzureVideoIndexer(mode)) {
     try {
       const azureOcr = await analyzeOcrViaAzureVideoIndexer({
@@ -971,7 +1002,44 @@ async function analyzeMediaStreams({ audioUrl, videoUrl, pageUrl, title, duratio
       }
     }
   }
-  return { audio, video, ocr };
+  if (["qwen", "hybrid"].includes(visionAnalysisProvider)) {
+    if (canUseQwenVl(mode)) {
+      try {
+        visualUnderstanding = await analyzeFramesViaQwenVl({
+          videoUrl,
+          pageUrl,
+          title,
+          duration,
+          segments,
+          headers: videoHeaders
+        });
+        if (visionAnalysisProvider === "hybrid" || visionAnalysisProvider === "qwen") {
+          ocr = mergeVisualUnderstandingIntoOcr(ocr, visualUnderstanding);
+        }
+      } catch (error) {
+        visualUnderstanding = {
+          ...visualUnderstanding,
+          provider: "qwen-vl",
+          model: qwenVlConfig.model,
+          warnings: [`Qwen-VL недоступен: ${error.message}`]
+        };
+        if (visionAnalysisProvider === "qwen") {
+          ocr = {
+            ...ocr,
+            warnings: uniqueWarnings([...(ocr.warnings || []), ...visualUnderstanding.warnings])
+          };
+        }
+      }
+    } else {
+      visualUnderstanding = {
+        ...visualUnderstanding,
+        provider: "qwen-vl",
+        model: qwenVlConfig.model,
+        warnings: ["Qwen-VL не включен: задайте VISION_ANALYSIS_PROVIDER=qwen|hybrid и QWEN_VL_API_KEY."]
+      };
+    }
+  }
+  return { audio, video, ocr, visualUnderstanding };
 }
 
 function uniqueWarnings(warnings = []) {
@@ -1244,7 +1312,22 @@ function buildVisualObservations({ segments, description, transcript, thumbnail,
       note: frame.text.slice(0, 220),
       thumbnail: context.thumbnail?.url || ""
     }));
-  return [...observations, ...frameMetricObservations, ...ocrObservations].slice(0, 24);
+  const qwen = mediaAnalysis?.visualUnderstanding;
+  const qwenObservations = qwen?.available ? [{
+    time: "кадры",
+    type: "визуальное обучение",
+    source: "qwen-vl",
+    topic: qwen.screenType || "визуальный анализ",
+    score: qwen.visualLearningScore || 0,
+    evidence: [
+      qwen.screenType ? `тип экрана: ${qwen.screenType}` : "",
+      qwen.educationalSignals?.length ? `учебные признаки: ${qwen.educationalSignals.join(", ")}` : "",
+      qwen.negativeSignals?.length ? `неучебные признаки: ${qwen.negativeSignals.join(", ")}` : ""
+    ].filter(Boolean).join("; ") || "визуальный анализ Qwen-VL",
+    note: qwen.summary || qwen.visibleText?.join("; ") || "Qwen-VL проанализировал ключевые кадры.",
+    thumbnail: context.thumbnail?.url || ""
+  }] : [];
+  return [...observations, ...frameMetricObservations, ...ocrObservations, ...qwenObservations].slice(0, 24);
 }
 
 const defaultFetchHeaders = {
@@ -1513,6 +1596,233 @@ async function extractFrameViaYtDlp(pageUrl, point, framePath) {
     }
   }
   throw new Error(`fallback через yt-dlp не извлек кадр: ${warnings.join("; ")}`);
+}
+
+function qwenFramePoints(segments = [], duration = 0, maxFrames = qwenVlConfig.maxFrames, minGap = qwenVlConfig.minSceneGapSeconds) {
+  const safeDuration = Math.max(1, Number(duration || 0));
+  const ranges = (segments || [])
+    .map((segment) => parseTimeRangeSeconds(segment.time))
+    .filter(Boolean);
+  const candidates = ranges.length
+    ? ranges.map((range) => clamp(range.midpoint || 1, 1, safeDuration))
+    : Array.from({ length: Math.max(1, maxFrames) }, (_, index) => {
+      const step = safeDuration / (Math.max(1, maxFrames) + 1);
+      return clamp(Math.round(step * (index + 1)), 1, safeDuration);
+    });
+  const points = [];
+  for (const point of candidates) {
+    if (points.length >= maxFrames) break;
+    if (points.some((item) => Math.abs(item - point) < minGap)) continue;
+    points.push(point);
+  }
+  if (!points.length) points.push(Math.min(30, safeDuration));
+  return points.slice(0, maxFrames);
+}
+
+async function extractVisionFrames(videoUrl, segments, duration, headers = {}, pageUrl = "") {
+  if (!videoUrl && !pageUrl) {
+    return { available: false, frames: [], warnings: ["Видеопоток для Qwen-VL недоступен."] };
+  }
+  if (!(await hasCommand("ffmpeg"))) {
+    return { available: false, frames: [], warnings: ["ffmpeg не установлен, извлечение кадров для Qwen-VL недоступно."] };
+  }
+  const points = qwenFramePoints(segments, duration);
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "green-a-qwen-vl-"));
+  const frames = [];
+  const warnings = [];
+  try {
+    for (let index = 0; index < points.length; index += 1) {
+      const point = points[index];
+      const framePath = path.join(tempDir, `qwen-frame-${index + 1}.jpg`);
+      let source = "ffmpeg-stream";
+      try {
+        if (!videoUrl) throw new Error("прямой видеопоток недоступен");
+        await execFilePromise("ffmpeg", [
+          "-hide_banner",
+          "-nostdin",
+          "-ss", String(point),
+          ...ffmpegInputArgs(videoUrl, headers),
+          "-frames:v", "1",
+          "-vf", `scale='min(${qwenVlConfig.maxImageWidth},iw)':-1`,
+          "-q:v", "4",
+          "-y",
+          framePath
+        ], { timeout: 25000, maxBuffer: 1024 * 1024 * 4 });
+      } catch (error) {
+        const fallback = await extractFrameViaYtDlp(pageUrl, point, framePath);
+        source = fallback.source;
+        warnings.push(...(fallback.warnings || []), `Qwen-VL кадр ${index + 1}: прямой stream недоступен (${error.message}), использован fallback.`);
+      }
+      const bytes = await fs.readFile(framePath);
+      frames.push({
+        time: secondsToTime(point),
+        imageUrl: `data:image/jpeg;base64,${bytes.toString("base64")}`,
+        source
+      });
+    }
+  } catch (error) {
+    warnings.push(`Извлечение кадров для Qwen-VL остановлено: ${error.message}`);
+  } finally {
+    await fs.rm(tempDir, { recursive: true, force: true });
+  }
+  return {
+    available: frames.length > 0,
+    frames,
+    warnings: uniqueWarnings(warnings)
+  };
+}
+
+function qwenVlPrompt() {
+  return [
+    "Analyze these sampled frames from a YouTube video for educational visual content.",
+    "Distinguish real visual teaching from entertainment, vlogs, gameplay, reaction videos, movies, music videos, and generic talking-head content.",
+    "Return strict JSON only:",
+    "{",
+    '  "has_visual_teaching": boolean,',
+    '  "screen_type": "slides|code|whiteboard|demo|talking_head|game|movie|music_video|vlog|unknown",',
+    '  "visible_text": ["..."],',
+    '  "educational_visual_signals": ["diagrams", "formulas", "step_by_step", "examples", "code", "charts"],',
+    '  "entertainment_visual_signals": ["vlog", "prank", "gameplay", "reaction", "music_video", "movie"],',
+    '  "visual_learning_score": 0,',
+    '  "confidence": 0,',
+    '  "summary": "short explanation"',
+    "}"
+  ].join("\n");
+}
+
+function extractQwenMessageContent(payload = {}) {
+  const content = payload?.choices?.[0]?.message?.content || payload?.output?.choices?.[0]?.message?.content || "";
+  if (Array.isArray(content)) {
+    return content.map((item) => item?.text || item?.content || "").join("\n");
+  }
+  return String(content || "");
+}
+
+function parseJsonObjectFromText(text = "") {
+  const raw = String(text || "").trim();
+  if (!raw) throw new Error("Qwen-VL вернул пустой ответ.");
+  try {
+    return JSON.parse(raw);
+  } catch {
+    const start = raw.indexOf("{");
+    const end = raw.lastIndexOf("}");
+    if (start >= 0 && end > start) return JSON.parse(raw.slice(start, end + 1));
+    throw new Error("Qwen-VL вернул невалидный JSON.");
+  }
+}
+
+function cleanStringArray(value = [], limit = 12) {
+  const list = Array.isArray(value) ? value : [value];
+  const map = new Map();
+  for (const item of list) {
+    const text = cleanSegmentText(item).slice(0, 220);
+    if (!text) continue;
+    const key = text.toLowerCase();
+    if (!map.has(key)) map.set(key, text);
+  }
+  return [...map.values()].slice(0, limit);
+}
+
+function normalizeQwenVlResult(raw = {}, context = {}) {
+  const visualLearningScore = Number(clamp(raw.visual_learning_score ?? raw.visualLearningScore ?? 0, 0, 10).toFixed(1));
+  const confidence = Number(clamp(raw.confidence ?? 0, 0, 1).toFixed(2));
+  const visibleText = cleanStringArray(raw.visible_text ?? raw.visibleText, 12);
+  const educationalSignals = cleanStringArray(raw.educational_visual_signals ?? raw.educationalSignals, 12);
+  const negativeSignals = cleanStringArray(raw.entertainment_visual_signals ?? raw.negativeSignals, 12);
+  const screenType = cleanSegmentText(raw.screen_type || raw.screenType || "unknown").toLowerCase() || "unknown";
+  const summary = cleanSegmentText(raw.summary || "").slice(0, 500);
+  const hasVisualTeaching = Boolean(raw.has_visual_teaching ?? raw.hasVisualTeaching ?? visualLearningScore >= 6);
+  return {
+    available: Boolean(hasVisualTeaching || visualLearningScore > 0 || visibleText.length || educationalSignals.length || negativeSignals.length || summary),
+    provider: "qwen-vl",
+    model: context.model || qwenVlConfig.model,
+    framesAnalyzed: Number(context.framesAnalyzed || 0),
+    screenType,
+    visualLearningScore,
+    confidence,
+    visibleText,
+    educationalSignals,
+    negativeSignals,
+    summary,
+    warnings: uniqueWarnings(context.warnings || [])
+  };
+}
+
+function qwenVisualSummaryText(visual = {}) {
+  const parts = [
+    `Qwen-VL визуальный анализ: тип экрана ${visual.screenType || "unknown"}, visual learning score ${visual.visualLearningScore ?? 0}/10, уверенность ${visual.confidence ?? 0}.`,
+    visual.summary ? `Вывод: ${visual.summary}` : "",
+    visual.visibleText?.length ? `Текст на кадрах: ${visual.visibleText.join("; ")}` : "",
+    visual.educationalSignals?.length ? `Учебные визуальные признаки: ${visual.educationalSignals.join(", ")}` : "",
+    visual.negativeSignals?.length ? `Неучебные визуальные признаки: ${visual.negativeSignals.join(", ")}` : ""
+  ];
+  return parts.filter(Boolean).join("\n");
+}
+
+function mergeVisualUnderstandingIntoOcr(localOcr = {}, visualUnderstanding = {}) {
+  if (!visualUnderstanding?.available) return localOcr;
+  const qwenText = qwenVisualSummaryText(visualUnderstanding);
+  const qwenFrame = {
+    time: "",
+    text: qwenText,
+    hasText: Boolean(qwenText),
+    source: "qwen-vl"
+  };
+  const frames = [...(Array.isArray(localOcr.frames) ? localOcr.frames : []), qwenFrame].filter((frame) => frame.text || frame.hasText);
+  const text = [localOcr.text || "", qwenText].filter(Boolean).join("\n");
+  const localSource = localOcr.source || "local-tesseract";
+  return {
+    ...localOcr,
+    available: Boolean(localOcr.available || qwenText),
+    frames,
+    text,
+    warnings: uniqueWarnings([...(localOcr.warnings || []), ...(visualUnderstanding.warnings || [])]),
+    source: localOcr.available ? "hybrid-qwen-local" : "qwen-vl",
+    localSource
+  };
+}
+
+function canUseQwenVl(mode) {
+  if (mode !== "stream") return false;
+  if (!["qwen", "hybrid"].includes(visionAnalysisProvider)) return false;
+  return Boolean(qwenVlConfig.apiKey && qwenVlConfig.baseUrl && qwenVlConfig.model);
+}
+
+async function analyzeFramesViaQwenVl({ videoUrl, pageUrl, title, duration, segments, headers = {} }) {
+  const extracted = await extractVisionFrames(videoUrl, segments, duration, headers, pageUrl);
+  if (!extracted.available) {
+    return normalizeQwenVlResult({}, {
+      model: qwenVlConfig.model,
+      framesAnalyzed: 0,
+      warnings: extracted.warnings
+    });
+  }
+  const content = [
+    { type: "text", text: `${qwenVlPrompt()}\n\nVideo title: ${title || "Unknown"}` },
+    ...extracted.frames.map((frame) => ({
+      type: "image_url",
+      image_url: { url: frame.imageUrl }
+    }))
+  ];
+  const payload = await fetchJson(`${qwenVlConfig.baseUrl}/chat/completions`, {
+    method: "POST",
+    timeoutMs: qwenVlConfig.timeoutMs,
+    headers: {
+      Authorization: `Bearer ${qwenVlConfig.apiKey}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      model: qwenVlConfig.model,
+      messages: [{ role: "user", content }],
+      response_format: { type: "json_object" }
+    })
+  });
+  const parsed = parseJsonObjectFromText(extractQwenMessageContent(payload));
+  return normalizeQwenVlResult(parsed, {
+    model: qwenVlConfig.model,
+    framesAnalyzed: extracted.frames.length,
+    warnings: extracted.warnings
+  });
 }
 
 async function fetchYouTubeApiData(videoId) {
@@ -1908,7 +2218,10 @@ async function analyzeYouTube(inputUrl, mode = "stream") {
   });
   const ocrProvider = mediaAnalysis.ocr?.source === "hybrid-azure-local"
     ? "hybrid"
-    : (mediaAnalysis.ocr?.source === "azure-video-indexer" ? "azure-video-indexer" : "local");
+    : (mediaAnalysis.ocr?.source === "azure-video-indexer" ? "azure-video-indexer" : (mediaAnalysis.ocr?.source === "qwen-vl" || mediaAnalysis.ocr?.source === "hybrid-qwen-local" ? mediaAnalysis.ocr.source : "local"));
+  const visionProvider = mediaAnalysis.visualUnderstanding?.available
+    ? "qwen-vl"
+    : (visionAnalysisProvider === "local" ? "local" : "qwen-vl");
   const visualObservations = buildVisualObservations({ segments, description, transcript, thumbnail, mediaAnalysis });
   const signals = [
     "название и описание страницы YouTube",
@@ -1925,8 +2238,11 @@ async function analyzeYouTube(inputUrl, mode = "stream") {
         ? "OCR текста на кадрах выполнен через Azure AI Video Indexer"
         : (ocrProvider === "hybrid"
           ? "OCR текста на кадрах выполнен в гибридном режиме: Azure AI Video Indexer + локальный tesseract"
-          : "OCR текста на кадрах выполнен через tesseract"))
+          : (ocrProvider === "qwen-vl" || ocrProvider === "hybrid-qwen-local"
+            ? "визуальный OCR/анализ кадров дополнен через Qwen-VL"
+            : "OCR текста на кадрах выполнен через tesseract")))
       : "",
+    mediaAnalysis.visualUnderstanding?.available ? `Qwen-VL проанализировал ключевые кадры: ${mediaAnalysis.visualUnderstanding.framesAnalyzed}` : "",
     visualObservations.length ? "визуальные наблюдения добавлены в пакет рейтингования" : "",
     !transcript && visualObservations.length ? "включен fallback: оценка может опираться на экран и визуальные действия" : "",
     mode === "stream" && thumbnail ? "thumbnail проверен без сохранения файла" : "",
@@ -1957,7 +2273,9 @@ async function analyzeYouTube(inputUrl, mode = "stream") {
         ? "OCR кадров выполнен через Azure AI Video Indexer; точность зависит от качества видео и статуса облачной обработки"
         : (ocrProvider === "hybrid"
           ? "OCR кадров выполнен в гибридном режиме (Azure + локальный OCR): выше полнота, но возможны дубли и шум."
-          : "OCR кадров выполнен локальным движком и может ошибаться на мелком, размытом или декоративном тексте"))
+          : (ocrProvider === "qwen-vl" || ocrProvider === "hybrid-qwen-local"
+            ? "визуальный анализ кадров выполнен через Qwen-VL; результат зависит от качества выбранных кадров и ответа модели"
+            : "OCR кадров выполнен локальным движком и может ошибаться на мелком, размытом или декоративном тексте")))
       : mode !== "stream"
         ? "OCR кадров отключен в быстром режиме"
         : /tesseract не установлен/i.test(ocrWarningText)
@@ -2016,7 +2334,10 @@ async function analyzeYouTube(inputUrl, mode = "stream") {
       videoAnalyzed: Boolean(mediaAnalysis.video?.available),
       ocrAnalyzed: Boolean(mediaAnalysis.ocr?.available),
       ocrProvider,
+      visionAnalyzed: Boolean(mediaAnalysis.visualUnderstanding?.available),
+      visionProvider,
       configuredAnalysisProvider: videoAnalysisProvider,
+      configuredVisionProvider: visionAnalysisProvider,
       transcriptAvailable: Boolean(transcript),
       signals,
       limitations,

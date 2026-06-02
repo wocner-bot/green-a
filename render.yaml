@@ -31,3 +31,19 @@ services:
         value: "22"
       - key: AZURE_VIDEO_INDEXER_TIMEOUT_MS
         value: "30000"
+      - key: VISION_ANALYSIS_PROVIDER
+        value: hybrid
+      - key: QWEN_VL_API_KEY
+        sync: false
+      - key: QWEN_VL_BASE_URL
+        value: https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+      - key: QWEN_VL_MODEL
+        value: qwen3-vl-plus
+      - key: QWEN_VL_MAX_FRAMES
+        value: "8"
+      - key: QWEN_VL_TIMEOUT_MS
+        value: "30000"
+      - key: QWEN_VL_MAX_IMAGE_WIDTH
+        value: "1280"
+      - key: QWEN_VL_MIN_SCENE_GAP_SECONDS
+        value: "20"

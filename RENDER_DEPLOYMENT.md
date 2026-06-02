@@ -46,6 +46,19 @@ AZURE_VIDEO_INDEXER_MAX_POLLS=22
 AZURE_VIDEO_INDEXER_TIMEOUT_MS=30000
 ```
 
+Опционально для Qwen-VL visual analysis:
+
+```
+VISION_ANALYSIS_PROVIDER=hybrid
+QWEN_VL_API_KEY=...
+QWEN_VL_BASE_URL=https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+QWEN_VL_MODEL=qwen3-vl-plus
+QWEN_VL_MAX_FRAMES=8
+QWEN_VL_TIMEOUT_MS=30000
+QWEN_VL_MAX_IMAGE_WIDTH=1280
+QWEN_VL_MIN_SCENE_GAP_SECONDS=20
+```
+
 ### 4. Deploy
 Нажми "Deploy Service" - Render автоматически запустит процесс сборки и развертывания.
 

@@ -112,6 +112,10 @@ AZURE_VIDEO_INDEXER_ACCOUNT_ID=...
 AZURE_VIDEO_INDEXER_LOCATION=...
 AZURE_VIDEO_INDEXER_ACCESS_TOKEN=...
 AZURE_VIDEO_INDEXER_SUBSCRIPTION_KEY=...
+VISION_ANALYSIS_PROVIDER=local|qwen|hybrid
+QWEN_VL_API_KEY=...
+QWEN_VL_BASE_URL=https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+QWEN_VL_MODEL=qwen3-vl-plus
 ```
 
 Do not commit `.env` files with real secrets. The app can work without YouTube API key and without Azure settings, using public YouTube data and local fallback analysis.
@@ -125,6 +129,7 @@ The backend can run deeper media analysis when the host has the required command
 - `tesseract` with English/Russian language packs for OCR on sampled video frames.
 - Optional: Azure AI Video Indexer as OCR provider (`VIDEO_ANALYSIS_PROVIDER=azure`) with automatic fallback to local OCR if Azure is unavailable.
 - Hybrid OCR mode (`VIDEO_ANALYSIS_PROVIDER=hybrid`): runs Azure Video Indexer and local `tesseract`, then merges OCR signals for higher recall.
+- Optional: Qwen-VL visual understanding (`VISION_ANALYSIS_PROVIDER=qwen|hybrid`) analyzes sampled frames through Alibaba Cloud Model Studio / DashScope and adds slide/code/diagram/demo signals to the visual evidence.
 
 On Render, `packages.txt` asks the platform to install:
 
@@ -145,6 +150,7 @@ If these tools are missing, the app still works, but the response marks audio/vi
 - segments videos into 30-90 second fragments;
 - analyzes audio loudness, pauses and available speech timing through `ffmpeg`;
 - analyzes sampled video frames for brightness/contrast and optional OCR through `ffmpeg` + `tesseract`;
+- optionally analyzes sampled frames with Qwen-VL for visual teaching signals such as slides, code, charts and whiteboards;
 - adds visual observations from screen, scene and OCR signals and uses them as a fallback when captions or speech are missing;
 - scores depth, pedagogy, structure, practice, reliability, complexity, technical quality and communication;
 - filters out clearly non-educational videos;
