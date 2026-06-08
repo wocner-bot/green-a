@@ -298,6 +298,61 @@ test('OpenAI education analysis normalization keeps structured filter fields', (
   assert.equal(result.reasoningSummary, 'Structured language lesson with examples and practice.');
 });
 
+test('OpenAI education analysis normalization keeps v2.4 component and review flags', () => {
+  const serverSource = fs.readFileSync(path.resolve(__dirname, '..', 'server.js'), 'utf8');
+  const snippet = [
+    extractFunctionSource(serverSource, 'clamp'),
+    extractFunctionSource(serverSource, 'cleanSegmentText'),
+    extractFunctionSource(serverSource, 'uniqueWarnings'),
+    extractFunctionSource(serverSource, 'cleanStringArray'),
+    extractFunctionSource(serverSource, 'normalizeOpenAiEducationResult'),
+    'module.exports = { normalizeOpenAiEducationResult };'
+  ].join('\n\n');
+
+  const sandbox = { module: { exports: {} }, exports: {} };
+  vm.createContext(sandbox);
+  vm.runInContext(snippet, sandbox);
+
+  const { normalizeOpenAiEducationResult } = sandbox.module.exports;
+  const result = normalizeOpenAiEducationResult({
+    education_score: 68,
+    class: 'educational',
+    confidence: 'medium',
+    subject_area: 'STEM',
+    is_learning_format: true,
+    teaching_markers: ['lesson', 'practice'],
+    marketing_flags: ['course promo'],
+    genre_flags: ['podcast framing'],
+    reasoning_summary: 'There is enough teaching core despite promotional framing.',
+    component_scores: {
+      learning_objective: 20,
+      teaching_structure: 12,
+      knowledge_density: 14,
+      practical_applicability: 9,
+      explanation_density: 7,
+      visual_learning: 6,
+      author_intent: 9
+    },
+    conflicting_profile: true,
+    manual_review: true,
+    technical_status: 'ok',
+    evidence_summary: 'Strong tutorial title, practical sequence and exercises.'
+  }, { model: 'gpt-test' });
+
+  assert.equal(result.available, true);
+  assert.equal(result.componentScores.learningObjective, 20);
+  assert.equal(result.componentScores.teachingStructure, 12);
+  assert.equal(result.componentScores.knowledgeDensity, 14);
+  assert.equal(result.componentScores.practicalApplicability, 9);
+  assert.equal(result.componentScores.explanationDensity, 7);
+  assert.equal(result.componentScores.visualLearning, 6);
+  assert.equal(result.componentScores.authorIntent, 9);
+  assert.equal(result.conflictingProfile, true);
+  assert.equal(result.manualReview, true);
+  assert.equal(result.technicalStatus, 'ok');
+  assert.equal(result.evidenceSummary, 'Strong tutorial title, practical sequence and exercises.');
+});
+
 test('Educational fit logic in app.js matches lib implementation', () => {
   const appSource = fs.readFileSync(path.resolve(__dirname, '..', 'app.js'), 'utf8');
   const { assessEducationalFit: assessFromLib } = require('../lib/educationalFit.js');
@@ -505,4 +560,83 @@ test('Structured school theory lesson scores above entertainment-style promo', (
   assert.equal(theoryAnalysis.educationalFit.classification, 'educational');
   assert(theoryAnalysis.total >= 55, `Structured school theory lesson should stay above low-score territory, got ${theoryAnalysis.total}`);
   assert(theoryAnalysis.total - promoAnalysis.total >= 10, `Educational theory lesson should clearly outrank entertainment-style promo, got ${theoryAnalysis.total} vs ${promoAnalysis.total}`);
+});
+
+test('calculateScores lets strong OpenAI educational verdict rescue sparse instructional videos', () => {
+  const appSource = fs.readFileSync(path.resolve(__dirname, '..', 'app.js'), 'utf8');
+  const constBlock = appSource.slice(0, appSource.indexOf('const els ='));
+
+  const snippet = [
+    constBlock,
+    extractFunctionSource(appSource, 'clamp'),
+    extractFunctionSource(appSource, 'finiteScore'),
+    extractFunctionSource(appSource, 'resolveVideoMetric'),
+    extractFunctionSource(appSource, 'countHits'),
+    extractFunctionSource(appSource, 'regexHits'),
+    extractFunctionSource(appSource, 'uniqueTypes'),
+    extractFunctionSource(appSource, 'visualObservationLines'),
+    extractFunctionSource(appSource, 'calculateScores'),
+    extractFunctionSource(appSource, 'assessEducationalFit'),
+    'module.exports = { calculateScores };'
+  ].join('\n\n');
+
+  const sandbox = {
+    module: { exports: {} },
+    exports: {},
+    crypto: { randomUUID: () => 'test-id' },
+    state: { segments: [], visualObservations: [] }
+  };
+  vm.createContext(sandbox);
+  vm.runInContext(snippet, sandbox);
+
+  const { calculateScores } = sandbox.module.exports;
+  const sparseVideo = {
+    title: 'Curso de Python para principiantes',
+    topic: 'Python',
+    description: '',
+    transcript: '',
+    ocr: '',
+    audio: 7,
+    video: 7,
+    slides: 6,
+    pace: 7,
+    segments: [],
+    mediaAnalysis: {
+      aiEducation: {
+        available: true,
+        provider: 'openai',
+        model: 'gpt-test',
+        educationScore: 78,
+        classification: 'educational',
+        confidence: 'high',
+        subjectArea: 'STEM',
+        isLearningFormat: true,
+        teachingMarkers: ['curso', 'principiantes', 'step by step'],
+        marketingFlags: [],
+        genreFlags: [],
+        reasoningSummary: 'Strong beginner-course framing with explicit teaching intent.',
+        componentScores: {
+          learningObjective: 18,
+          teachingStructure: 11,
+          knowledgeDensity: 10,
+          practicalApplicability: 7,
+          explanationDensity: 6,
+          visualLearning: 0,
+          authorIntent: 9
+        },
+        conflictingProfile: false,
+        manualReview: false,
+        technicalStatus: 'sparse_data',
+        evidenceSummary: 'Strong title-level instructional evidence.'
+      }
+    }
+  };
+
+  const { flags, scores } = calculateScores(sparseVideo);
+
+  assert.equal(flags.educationalFit.exclude, false);
+  assert.equal(flags.educationalFit.classification, 'educational');
+  assert.equal(flags.aiEducation.manualReview, false);
+  assert.equal(flags.aiEducation.componentScores.learningObjective, 18);
+  assert(scores.educationalFitScore >= 7.5, `expected AI rescue to lift educational fit, got ${scores.educationalFitScore}`);
 });

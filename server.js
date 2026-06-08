@@ -1860,7 +1860,12 @@ function openAiEducationSchema() {
       "teaching_markers",
       "marketing_flags",
       "genre_flags",
-      "reasoning_summary"
+      "reasoning_summary",
+      "component_scores",
+      "conflicting_profile",
+      "manual_review",
+      "technical_status",
+      "evidence_summary"
     ],
     properties: {
       education_score: { type: "integer", minimum: 0, maximum: 100 },
@@ -1871,7 +1876,33 @@ function openAiEducationSchema() {
       teaching_markers: { type: "array", items: { type: "string" } },
       marketing_flags: { type: "array", items: { type: "string" } },
       genre_flags: { type: "array", items: { type: "string" } },
-      reasoning_summary: { type: "string" }
+      reasoning_summary: { type: "string" },
+      component_scores: {
+        type: "object",
+        additionalProperties: false,
+        required: [
+          "learning_objective",
+          "teaching_structure",
+          "knowledge_density",
+          "practical_applicability",
+          "explanation_density",
+          "visual_learning",
+          "author_intent"
+        ],
+        properties: {
+          learning_objective: { type: "integer", minimum: 0, maximum: 25 },
+          teaching_structure: { type: "integer", minimum: 0, maximum: 15 },
+          knowledge_density: { type: "integer", minimum: 0, maximum: 20 },
+          practical_applicability: { type: "integer", minimum: 0, maximum: 10 },
+          explanation_density: { type: "integer", minimum: 0, maximum: 10 },
+          visual_learning: { type: "integer", minimum: 0, maximum: 10 },
+          author_intent: { type: "integer", minimum: 0, maximum: 10 }
+        }
+      },
+      conflicting_profile: { type: "boolean" },
+      manual_review: { type: "boolean" },
+      technical_status: { type: "string", enum: ["ok", "sparse_data", "low_confidence_language", "unavailable", "error"] },
+      evidence_summary: { type: "string" }
     }
   };
 }
@@ -1880,10 +1911,17 @@ function openAiEducationPrompt() {
   return [
     "You are the Green Argus Education Filter.",
     "Decide whether a YouTube video has an educational format, not whether it is high quality.",
+    "Follow the Green Argus v2.4 filter logic: educational videos should be passed through even if they are promotional, mediocre, or incomplete, as long as there is real teaching core.",
     "Prioritize explicit learning intent markers: обучение, урок, уроки, научить, learn, teach, lesson, tutorial, course, how to, guide, workshop, training, and equivalents in other languages.",
     "Marketing, quick promises, and sales language are flags for the quality evaluator. Do not reject a video solely because of marketing if it has a real teaching core.",
     "How-to instructions and practical step-by-step guides count as educational format.",
     "Entertainment, music, movies, vlogs, pranks, reactions, and gameplay are non-educational unless they contain a noticeable teaching core.",
+    "Technical lack of transcript or sparse metadata should usually lead to uncertain/manual review, not to non-educational, when learning intent is visible.",
+    "Score the components explicitly: learning objective 0-25, teaching structure 0-15, knowledge density 0-20, practical applicability 0-10, explanation density 0-10, visual learning 0-10, author intent 0-10.",
+    "Set conflicting_profile=true when the profile is uneven: one major learning component is strong but another core component is zero.",
+    "Set manual_review=true for sparse data, genre-conflict, language uncertainty, or borderline educational cases.",
+    "Set technical_status to sparse_data, low_confidence_language, unavailable, error, or ok.",
+    "evidence_summary must briefly explain the strongest educational evidence in plain language.",
     "Return only the JSON object matching the schema."
   ].join("\n");
 }
@@ -1912,9 +1950,23 @@ function normalizeOpenAiEducationResult(raw = {}, context = {}) {
     : "other";
   const educationScore = Math.round(clamp(raw.education_score ?? 50, 0, 100));
   const reasoningSummary = cleanSegmentText(raw.reasoning_summary || "").slice(0, 700);
+  const evidenceSummary = cleanSegmentText(raw.evidence_summary || "").slice(0, 500);
   const teachingMarkers = cleanStringArray(raw.teaching_markers, 18);
   const marketingFlags = cleanStringArray(raw.marketing_flags, 12);
   const genreFlags = cleanStringArray(raw.genre_flags, 12);
+  const componentScoresRaw = raw.component_scores && typeof raw.component_scores === "object" ? raw.component_scores : {};
+  const componentScores = {
+    learningObjective: Math.round(clamp(componentScoresRaw.learning_objective ?? 0, 0, 25)),
+    teachingStructure: Math.round(clamp(componentScoresRaw.teaching_structure ?? 0, 0, 15)),
+    knowledgeDensity: Math.round(clamp(componentScoresRaw.knowledge_density ?? 0, 0, 20)),
+    practicalApplicability: Math.round(clamp(componentScoresRaw.practical_applicability ?? 0, 0, 10)),
+    explanationDensity: Math.round(clamp(componentScoresRaw.explanation_density ?? 0, 0, 10)),
+    visualLearning: Math.round(clamp(componentScoresRaw.visual_learning ?? 0, 0, 10)),
+    authorIntent: Math.round(clamp(componentScoresRaw.author_intent ?? 0, 0, 10))
+  };
+  const technicalStatus = ["ok", "sparse_data", "low_confidence_language", "unavailable", "error"].includes(raw.technical_status)
+    ? raw.technical_status
+    : "ok";
   return {
     available: true,
     provider: "openai",
@@ -1928,6 +1980,11 @@ function normalizeOpenAiEducationResult(raw = {}, context = {}) {
     marketingFlags,
     genreFlags,
     reasoningSummary,
+    evidenceSummary,
+    componentScores,
+    conflictingProfile: Boolean(raw.conflicting_profile),
+    manualReview: Boolean(raw.manual_review),
+    technicalStatus,
     warnings: uniqueWarnings(context.warnings || [])
   };
 }
@@ -1946,6 +2003,19 @@ function unavailableOpenAiEducationResult(warnings = []) {
     marketingFlags: [],
     genreFlags: [],
     reasoningSummary: "",
+    evidenceSummary: "",
+    componentScores: {
+      learningObjective: 0,
+      teachingStructure: 0,
+      knowledgeDensity: 0,
+      practicalApplicability: 0,
+      explanationDensity: 0,
+      visualLearning: 0,
+      authorIntent: 0
+    },
+    conflictingProfile: false,
+    manualReview: false,
+    technicalStatus: warnings.length ? "error" : "unavailable",
     warnings: uniqueWarnings(warnings)
   };
 }
@@ -2494,6 +2564,10 @@ async function analyzeYouTube(inputUrl, mode = "stream") {
     ? [
       `OpenAI Education Filter: ${aiEducationAnalysis.classification}, score ${aiEducationAnalysis.educationScore}/100, confidence ${aiEducationAnalysis.confidence}.`,
       `Предмет: ${aiEducationAnalysis.subjectArea}. Учебный формат: ${aiEducationAnalysis.isLearningFormat ? "да" : "нет"}.`,
+      `Компоненты: цель ${aiEducationAnalysis.componentScores.learningObjective}/25, структура ${aiEducationAnalysis.componentScores.teachingStructure}/15, знания ${aiEducationAnalysis.componentScores.knowledgeDensity}/20, практика ${aiEducationAnalysis.componentScores.practicalApplicability}/10, объяснение ${aiEducationAnalysis.componentScores.explanationDensity}/10, визуал ${aiEducationAnalysis.componentScores.visualLearning}/10, намерение ${aiEducationAnalysis.componentScores.authorIntent}/10.`,
+      aiEducationAnalysis.manualReview ? "Нужна ручная проверка: да." : "",
+      aiEducationAnalysis.conflictingProfile ? "Профиль противоречивый: сильные и нулевые учебные компоненты одновременно." : "",
+      aiEducationAnalysis.evidenceSummary ? `Ключевое доказательство: ${aiEducationAnalysis.evidenceSummary}` : "",
       aiEducationAnalysis.teachingMarkers.length ? `Учебные маркеры: ${aiEducationAnalysis.teachingMarkers.join(", ")}` : "",
       aiEducationAnalysis.marketingFlags.length ? `Маркетинговые флаги: ${aiEducationAnalysis.marketingFlags.join(", ")}` : "",
       aiEducationAnalysis.genreFlags.length ? `Жанровые флаги: ${aiEducationAnalysis.genreFlags.join(", ")}` : "",

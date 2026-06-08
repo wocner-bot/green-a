@@ -487,7 +487,7 @@ function mediaAnalysisLines(media = null) {
   }
   if (media.aiEducation) {
     const ai = media.aiEducation;
-    rows.push(`AI Education: ${ai.available ? "OpenAI проанализировал формат" : "недоступно"}; class ${ai.classification || "н/д"}; score ${ai.educationScore ?? "н/д"}/100; confidence ${ai.confidence || "н/д"}; subject ${ai.subjectArea || "other"}. ${ai.reasoningSummary || ""} ${(ai.warnings || []).join(" ")}`);
+    rows.push(`AI Education: ${ai.available ? "OpenAI проанализировал формат" : "недоступно"}; class ${ai.classification || "н/д"}; score ${ai.educationScore ?? "н/д"}/100; confidence ${ai.confidence || "н/д"}; subject ${ai.subjectArea || "other"}; technical ${ai.technicalStatus || "n/a"}; manual review ${ai.manualReview ? "yes" : "no"}. ${ai.reasoningSummary || ""} ${ai.evidenceSummary || ""} ${(ai.warnings || []).join(" ")}`);
   }
   return rows.filter((row) => row.trim());
 }
@@ -664,9 +664,29 @@ function calculateScores(video = null) {
     visualFallbackActive
   });
   const aiEducation = mediaAnalysis?.aiEducation || null;
+  const aiComponentScores = aiEducation?.componentScores || null;
+  const aiTeachingCore = aiComponentScores
+    ? Number(aiComponentScores.learningObjective || 0)
+      + Number(aiComponentScores.teachingStructure || 0)
+      + Number(aiComponentScores.knowledgeDensity || 0)
+      + Number(aiComponentScores.practicalApplicability || 0)
+    : 0;
+  const aiSignalsSparseButInstructional = aiEducation?.technicalStatus === "sparse_data" && Number(aiComponentScores?.authorIntent || 0) >= 7;
   const aiEducationalBoost = aiEducation?.available && aiEducation.classification === "educational" && Number(aiEducation.educationScore || 0) >= 61;
   const aiUncertainBoost = aiEducation?.available && aiEducation.classification === "uncertain" && Number(aiEducation.educationScore || 0) >= 45;
-  const adjustedEducationalFit = aiEducationalBoost
+  const aiRescueToEducational = aiEducationalBoost && (
+    aiTeachingCore >= 30 ||
+    Number(aiComponentScores?.learningObjective || 0) >= 15 ||
+    Number(aiComponentScores?.authorIntent || 0) >= 8 ||
+    aiSignalsSparseButInstructional
+  );
+  const aiRescueToUncertain = (aiUncertainBoost || aiSignalsSparseButInstructional) && (
+    aiTeachingCore >= 18 ||
+    Number(aiComponentScores?.learningObjective || 0) >= 10 ||
+    Number(aiComponentScores?.teachingStructure || 0) >= 8 ||
+    Number(aiComponentScores?.authorIntent || 0) >= 7
+  );
+  const adjustedEducationalFit = aiRescueToEducational
     ? {
       ...educationalFit,
       eligible: true,
@@ -674,14 +694,20 @@ function calculateScores(video = null) {
       uncertain: false,
       exclude: false,
       classification: "educational",
-      confidence: aiEducation.confidence === "high" ? "high" : educationalFit.confidence,
-      score: Math.max(Number(educationalFit.score || 0), Math.round((Number(aiEducation.educationScore || 0) / 10) * 10) / 10),
+      confidence: aiEducation.manualReview ? "medium" : (aiEducation.confidence === "high" ? "high" : educationalFit.confidence),
+      score: Math.max(
+        Number(educationalFit.score || 0),
+        Math.round((Number(aiEducation.educationScore || 0) / 10) * 10) / 10,
+        Math.min(9.5, 5 + (aiTeachingCore / 75) * 4.2)
+      ),
       reasons: [
         ...educationalFit.reasons.filter((reason) => !/не хватает признаков|недостаточно учебной механики|пограничный случай/i.test(reason)),
-        `OpenAI Education Filter: ${aiEducation.educationScore}/100, ${aiEducation.reasoningSummary || "обучающий формат подтвержден AI-анализом"}`
-      ]
+        `OpenAI Education Filter: ${aiEducation.educationScore}/100, ${aiEducation.reasoningSummary || "обучающий формат подтвержден AI-анализом"}`,
+        aiEducation.evidenceSummary ? `OpenAI evidence: ${aiEducation.evidenceSummary}` : "",
+        aiEducation.manualReview ? "OpenAI рекомендует ручную проверку из-за sparse/пограничных данных." : ""
+      ].filter(Boolean)
     }
-    : (aiUncertainBoost && educationalFit.exclude
+    : (aiRescueToUncertain && educationalFit.exclude
       ? {
         ...educationalFit,
         eligible: false,
@@ -690,13 +716,34 @@ function calculateScores(video = null) {
         exclude: false,
         classification: "uncertain",
         confidence: "medium",
-        score: Math.max(Number(educationalFit.score || 0), 5.5),
+        score: Math.max(
+          Number(educationalFit.score || 0),
+          5.5,
+          Math.min(7.2, 4.2 + (aiTeachingCore / 75) * 2.2)
+        ),
         reasons: [
-          ...educationalFit.reasons,
-          `OpenAI Education Filter перевел ролик в uncertain: ${aiEducation.educationScore}/100`
-        ]
+          ...educationalFit.reasons.filter((reason) => !/не хватает признаков|недостаточно учебной механики/i.test(reason)),
+          `OpenAI Education Filter перевел ролик в uncertain: ${aiEducation.educationScore}/100`,
+          aiEducation.evidenceSummary ? `OpenAI evidence: ${aiEducation.evidenceSummary}` : "",
+          aiEducation.manualReview ? "OpenAI рекомендует ручную проверку." : ""
+        ].filter(Boolean)
       }
-      : educationalFit);
+      : (aiEducation?.available && aiEducation.conflictingProfile && educationalFit.exclude
+        ? {
+          ...educationalFit,
+          eligible: false,
+          weak: true,
+          uncertain: true,
+          exclude: false,
+          classification: "uncertain",
+          confidence: "medium",
+          score: Math.max(Number(educationalFit.score || 0), 5.2),
+          reasons: [
+            ...educationalFit.reasons,
+            "OpenAI обнаружил противоречивый профиль: часть учебных компонентов сильная, часть отсутствует, поэтому ролик переведен в uncertain."
+          ]
+        }
+        : educationalFit));
   const curriculumTheoryLesson = educationalFit.eligible &&
     !salesHits &&
     !promiseHits &&
@@ -1686,7 +1733,18 @@ function exportRatingData() {
         ["aiEducation", "teachingMarkers", (video.mediaAnalysis?.aiEducation?.teachingMarkers || []).join("; ")],
         ["aiEducation", "marketingFlags", (video.mediaAnalysis?.aiEducation?.marketingFlags || []).join("; ")],
         ["aiEducation", "genreFlags", (video.mediaAnalysis?.aiEducation?.genreFlags || []).join("; ")],
+        ["aiEducation", "component.learningObjective", video.mediaAnalysis?.aiEducation?.componentScores?.learningObjective ?? ""],
+        ["aiEducation", "component.teachingStructure", video.mediaAnalysis?.aiEducation?.componentScores?.teachingStructure ?? ""],
+        ["aiEducation", "component.knowledgeDensity", video.mediaAnalysis?.aiEducation?.componentScores?.knowledgeDensity ?? ""],
+        ["aiEducation", "component.practicalApplicability", video.mediaAnalysis?.aiEducation?.componentScores?.practicalApplicability ?? ""],
+        ["aiEducation", "component.explanationDensity", video.mediaAnalysis?.aiEducation?.componentScores?.explanationDensity ?? ""],
+        ["aiEducation", "component.visualLearning", video.mediaAnalysis?.aiEducation?.componentScores?.visualLearning ?? ""],
+        ["aiEducation", "component.authorIntent", video.mediaAnalysis?.aiEducation?.componentScores?.authorIntent ?? ""],
+        ["aiEducation", "conflictingProfile", Boolean(video.mediaAnalysis?.aiEducation?.conflictingProfile)],
+        ["aiEducation", "manualReview", Boolean(video.mediaAnalysis?.aiEducation?.manualReview)],
+        ["aiEducation", "technicalStatus", video.mediaAnalysis?.aiEducation?.technicalStatus || ""],
         ["aiEducation", "summary", video.mediaAnalysis?.aiEducation?.reasoningSummary || ""],
+        ["aiEducation", "evidenceSummary", video.mediaAnalysis?.aiEducation?.evidenceSummary || ""],
         ["aiEducation", "warnings", (video.mediaAnalysis?.aiEducation?.warnings || []).join("; ")]
       ]
     },
