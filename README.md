@@ -122,6 +122,38 @@ OPENAI_BASE_URL=https://api.openai.com/v1
 OPENAI_MODEL=gpt-5.2
 ```
 
+Render fields to fill manually:
+
+```text
+NODE_ENV=production
+HOST=0.0.0.0
+YOUTUBE_API_KEY=...
+VIDEO_ANALYSIS_PROVIDER=hybrid
+AZURE_VIDEO_INDEXER_BASE_URL=https://api.videoindexer.ai
+AZURE_VIDEO_INDEXER_ACCOUNT_ID=...
+AZURE_VIDEO_INDEXER_LOCATION=...
+AZURE_VIDEO_INDEXER_ACCESS_TOKEN=...
+AZURE_VIDEO_INDEXER_SUBSCRIPTION_KEY=...
+AZURE_VIDEO_INDEXER_LANGUAGE=AutoDetect
+AZURE_VIDEO_INDEXER_POLL_MS=7000
+AZURE_VIDEO_INDEXER_MAX_POLLS=22
+AZURE_VIDEO_INDEXER_TIMEOUT_MS=30000
+VISION_ANALYSIS_PROVIDER=hybrid
+QWEN_VL_API_KEY=...
+QWEN_VL_BASE_URL=https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+QWEN_VL_MODEL=qwen3-vl-plus
+QWEN_VL_MAX_FRAMES=8
+QWEN_VL_TIMEOUT_MS=30000
+QWEN_VL_MAX_IMAGE_WIDTH=1280
+QWEN_VL_MIN_SCENE_GAP_SECONDS=20
+AI_ANALYSIS_PROVIDER=hybrid
+OPENAI_API_KEY=...
+OPENAI_BASE_URL=https://api.openai.com/v1
+OPENAI_MODEL=gpt-5.2
+OPENAI_TIMEOUT_MS=30000
+AI_ANALYSIS_MAX_TRANSCRIPT_WORDS=5000
+```
+
 Do not commit `.env` files with real secrets. The app can work without YouTube API key and without Azure settings, using public YouTube data and local fallback analysis.
 
 ## Media Analysis

@@ -7,14 +7,21 @@ services:
     startCommand: npm start
     healthCheckPath: /healthz
     envVars:
+      # Core app settings
       - key: NODE_ENV
         value: production
       - key: HOST
         value: 0.0.0.0
+
+      # YouTube enrichment
       - key: YOUTUBE_API_KEY
         sync: false
+
+      # OCR / video analysis
       - key: VIDEO_ANALYSIS_PROVIDER
         value: hybrid
+      - key: AZURE_VIDEO_INDEXER_BASE_URL
+        value: https://api.videoindexer.ai
       - key: AZURE_VIDEO_INDEXER_ACCOUNT_ID
         sync: false
       - key: AZURE_VIDEO_INDEXER_LOCATION
@@ -31,6 +38,8 @@ services:
         value: "22"
       - key: AZURE_VIDEO_INDEXER_TIMEOUT_MS
         value: "30000"
+
+      # Visual analysis via Qwen-VL
       - key: VISION_ANALYSIS_PROVIDER
         value: hybrid
       - key: QWEN_VL_API_KEY
@@ -47,6 +56,8 @@ services:
         value: "1280"
       - key: QWEN_VL_MIN_SCENE_GAP_SECONDS
         value: "20"
+
+      # AI educational-format analysis via OpenAI
       - key: AI_ANALYSIS_PROVIDER
         value: hybrid
       - key: OPENAI_API_KEY

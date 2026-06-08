@@ -83,6 +83,59 @@ AI_ANALYSIS_MAX_TRANSCRIPT_WORDS=5000
 
 После изменения переменных нажми `Save Changes`, затем `Manual Deploy` -> `Deploy latest commit`, если Render сам не перезапустит сервис.
 
+### 3.1. Точные поля, которые нужно заполнить в Render
+
+Обязательный минимум:
+
+| Key | Value |
+|---|---|
+| `NODE_ENV` | `production` |
+| `HOST` | `0.0.0.0` |
+| `YOUTUBE_API_KEY` | твой YouTube Data API key |
+| `VIDEO_ANALYSIS_PROVIDER` | `hybrid` |
+| `VISION_ANALYSIS_PROVIDER` | `hybrid` |
+| `AI_ANALYSIS_PROVIDER` | `hybrid` |
+
+Для Azure Video Indexer:
+
+| Key | Value |
+|---|---|
+| `AZURE_VIDEO_INDEXER_BASE_URL` | `https://api.videoindexer.ai` |
+| `AZURE_VIDEO_INDEXER_ACCOUNT_ID` | твой Azure Video Indexer Account ID |
+| `AZURE_VIDEO_INDEXER_LOCATION` | например `trial`, `eastus`, `westeurope` |
+| `AZURE_VIDEO_INDEXER_ACCESS_TOKEN` | временный access token, если используешь его |
+| `AZURE_VIDEO_INDEXER_SUBSCRIPTION_KEY` | subscription key, если получаешь токен через него |
+| `AZURE_VIDEO_INDEXER_LANGUAGE` | `AutoDetect` |
+| `AZURE_VIDEO_INDEXER_POLL_MS` | `7000` |
+| `AZURE_VIDEO_INDEXER_MAX_POLLS` | `22` |
+| `AZURE_VIDEO_INDEXER_TIMEOUT_MS` | `30000` |
+
+Для Qwen-VL:
+
+| Key | Value |
+|---|---|
+| `QWEN_VL_API_KEY` | твой DashScope / Alibaba Cloud API key |
+| `QWEN_VL_BASE_URL` | `https://dashscope-intl.aliyuncs.com/compatible-mode/v1` |
+| `QWEN_VL_MODEL` | `qwen3-vl-plus` |
+| `QWEN_VL_MAX_FRAMES` | `8` |
+| `QWEN_VL_TIMEOUT_MS` | `30000` |
+| `QWEN_VL_MAX_IMAGE_WIDTH` | `1280` |
+| `QWEN_VL_MIN_SCENE_GAP_SECONDS` | `20` |
+
+Для OpenAI:
+
+| Key | Value |
+|---|---|
+| `OPENAI_API_KEY` | твой OpenAI API key |
+| `OPENAI_BASE_URL` | `https://api.openai.com/v1` |
+| `OPENAI_MODEL` | `gpt-5.2` |
+| `OPENAI_TIMEOUT_MS` | `30000` |
+| `AI_ANALYSIS_MAX_TRANSCRIPT_WORDS` | `5000` |
+
+Если какой-то внешний сервис пока не используешь:
+- можно оставить его секретные поля пустыми;
+- но соответствующий provider лучше переключить на `local`, чтобы сервис не пытался ходить во внешний API.
+
 ### 4. Deploy
 Нажми "Deploy Service" - Render автоматически запустит процесс сборки и развертывания.
 
