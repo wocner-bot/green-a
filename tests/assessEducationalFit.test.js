@@ -40,13 +40,15 @@ test('Excludes motivational content with quick promises and sales push', () => {
   assert(result.markers.guaranteeMarkers >= 1, `Should detect guarantee markers, got ${result.markers.guaranteeMarkers}`);
 });
 
-test('Excludes course-overview sales content without clear teaching mechanics', () => {
+test('Keeps course-overview sales content as uncertain when it has some teaching core', () => {
   const data = {
     title: 'Курс по трейдингу: обзор стратегий',
     transcript: 'Разберем популярные стратегии и почему они работают. Подписывайтесь и покупайте полный курс.'
   };
   const result = assessEducationalFit(data, [], {});
-  assert.equal(result.exclude, true, 'Course promo overview should be excluded as not enough teaching mechanics');
+  assert.equal(result.exclude, false, 'Course promo overview with explanation markers should not be hard-excluded');
+  assert.equal(result.classification, 'uncertain', 'Course promo overview with weak teaching core should remain uncertain');
+  assert(result.markers.salesPushMarkers >= 1, 'Sales marker should still be passed as a flag');
 });
 
 test('Includes English lecture with examples and exercises', () => {
@@ -138,6 +140,67 @@ test('Classifies lesson as educational when description has objective and practi
   ], {});
   assert.equal(result.exclude, false, 'Lesson with description objective/practice should not be excluded');
   assert.equal(result.classification, 'educational', 'Lesson with clear description teaching mechanics should be educational');
+});
+
+test('Prioritizes explicit learning synonyms in title and transcript', () => {
+  const data = {
+    title: 'Обучение продажам: как научить менеджера вести переговоры',
+    description: 'Практический мастер-класс для начинающих.',
+    transcript: 'Сегодня разберем технику переговоров. Сначала объясним принцип, затем рассмотрим пример и дадим упражнение для самостоятельной практики.'
+  };
+  const result = assessEducationalFit(data, [
+    { time: '00:00-00:50', type: 'теория', note: 'объяснение принципа' },
+    { time: '00:50-01:40', type: 'пример', note: 'пример переговоров' },
+    { time: '01:40-02:20', type: 'практика', note: 'упражнение' }
+  ], {});
+  assert.equal(result.exclude, false, 'Strong learning synonyms should pass the education filter');
+  assert.equal(result.classification, 'educational', 'Strong learning synonyms plus teaching flow should classify as educational');
+});
+
+test('Includes multilingual lesson and course synonyms as educational intent', () => {
+  const data = {
+    title: 'Curso de Python para principiantes: lección 1',
+    description: 'Aprender Python desde cero con ejemplos y ejercicios.',
+    transcript: 'En esta lección vamos a explicar variables, mostrar ejemplos paso a paso y practicar con ejercicios.'
+  };
+  const result = assessEducationalFit(data, [
+    { time: '00:00-00:45', type: 'theory', note: 'variables explained' },
+    { time: '00:45-01:30', type: 'example', note: 'step by step example' },
+    { time: '01:30-02:10', type: 'practice', note: 'exercises' }
+  ], {});
+  assert.equal(result.exclude, false, 'Spanish course/lesson markers should pass the filter');
+  assert.equal(result.classification, 'educational', 'Spanish course/lesson markers should classify as educational with teaching content');
+});
+
+test('Marketing-heavy educational format passes filter and keeps marketing flags', () => {
+  const data = {
+    title: 'Выучи английский за 4 урока: курс для начинающих',
+    description: 'Урок 1: базовая грамматика. Урок 2: словарь. Урок 3: практика. Урок 4: проверка.',
+    transcript: 'Купите полный курс со скидкой, но сейчас начнем обучение. В этом уроке вы научитесь строить фразы. Разберем правило, посмотрим пример и сделаем упражнение.'
+  };
+  const result = assessEducationalFit(data, [
+    { time: '00:00-00:40', type: 'теория', note: 'правило грамматики' },
+    { time: '00:40-01:20', type: 'пример', note: 'пример фразы' },
+    { time: '01:20-02:00', type: 'практика', note: 'упражнение и проверка' }
+  ], {});
+  assert.equal(result.exclude, false, 'Marketing-heavy educational format should not be rejected by the filter');
+  assert.equal(result.classification, 'educational', 'Structured course with marketing should classify as educational format');
+  assert(result.markers.salesPushMarkers >= 1, 'Sales markers should still be passed as flags');
+  assert(result.markers.quickPromiseMarkers >= 1, 'Quick-promise markers should still be passed as flags');
+});
+
+test('Includes practical how-to instruction as educational format', () => {
+  const data = {
+    title: 'How to configure nginx step by step',
+    description: 'A practical guide for beginners.',
+    transcript: 'In this tutorial we configure nginx from scratch. Step one install the package. Step two edit the config. Then test the server and check the result.'
+  };
+  const result = assessEducationalFit(data, [
+    { time: '00:00-00:40', type: 'demo', note: 'install package step by step' },
+    { time: '00:40-01:20', type: 'practice', note: 'edit config and test result' }
+  ], {});
+  assert.equal(result.exclude, false, 'How-to instruction should be treated as educational format');
+  assert.equal(result.classification, 'educational', 'Concrete how-to should classify as educational');
 });
 
 test('Excludes satirical film review even if transcript contains incidental educational words', () => {
