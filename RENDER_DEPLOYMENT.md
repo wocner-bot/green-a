@@ -65,7 +65,7 @@ QWEN_VL_MIN_SCENE_GAP_SECONDS=20
 AI_ANALYSIS_PROVIDER=hybrid
 OPENAI_API_KEY=...
 OPENAI_BASE_URL=https://api.openai.com/v1
-OPENAI_MODEL=gpt-5.2
+OPENAI_MODEL=gpt-4.1-mini
 OPENAI_TIMEOUT_MS=30000
 AI_ANALYSIS_MAX_TRANSCRIPT_WORDS=5000
 ```
@@ -77,7 +77,7 @@ AI_ANALYSIS_MAX_TRANSCRIPT_WORDS=5000
 | `AI_ANALYSIS_PROVIDER` | `hybrid` | Добавить/оставить так. Включает OpenAI как дополнительный AI-анализ с fallback. |
 | `OPENAI_API_KEY` | `sk-...` | Вставить свой OpenAI API key. Это секрет, не коммитить в GitHub. |
 | `OPENAI_BASE_URL` | `https://api.openai.com/v1` | Добавить/оставить так. |
-| `OPENAI_MODEL` | `gpt-5.2` | Добавить/оставить так, если нужен текущий основной AI-анализ. |
+| `OPENAI_MODEL` | `gpt-4.1-mini` | Рекомендуемый более экономичный OpenAI-модельный профиль для этого AI-анализа. |
 | `OPENAI_TIMEOUT_MS` | `30000` | Добавить/оставить так. |
 | `AI_ANALYSIS_MAX_TRANSCRIPT_WORDS` | `5000` | Добавить/оставить так, чтобы ограничить стоимость анализа. |
 
@@ -128,7 +128,7 @@ AI_ANALYSIS_MAX_TRANSCRIPT_WORDS=5000
 |---|---|
 | `OPENAI_API_KEY` | твой OpenAI API key |
 | `OPENAI_BASE_URL` | `https://api.openai.com/v1` |
-| `OPENAI_MODEL` | `gpt-5.2` |
+| `OPENAI_MODEL` | `gpt-4.1-mini` |
 | `OPENAI_TIMEOUT_MS` | `30000` |
 | `AI_ANALYSIS_MAX_TRANSCRIPT_WORDS` | `5000` |
 

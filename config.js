@@ -1,3 +1,3 @@
 window.GREEN_A_CONFIG = {
-  apiBase: ""
+  apiBase: "https://green-a-1.onrender.com"
 };

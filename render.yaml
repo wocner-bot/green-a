@@ -65,7 +65,7 @@ services:
       - key: OPENAI_BASE_URL
         value: https://api.openai.com/v1
       - key: OPENAI_MODEL
-        value: gpt-5.2
+        value: gpt-4.1-mini
       - key: OPENAI_TIMEOUT_MS
         value: "30000"
       - key: AI_ANALYSIS_MAX_TRANSCRIPT_WORDS

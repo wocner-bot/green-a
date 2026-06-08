@@ -437,7 +437,7 @@ function apiBase() {
   const configured = window.GREEN_A_CONFIG?.apiBase || window.GREEN_A_API_BASE || localStorage.getItem("GREEN_A_API_BASE");
   if (configured) return String(configured).replace(/\/+$/, "");
   if (location.protocol === "file:") return "http://127.0.0.1:8787";
-  if (/\.github\.io$/i.test(location.hostname)) return "https://green-a.onrender.com";
+  if (/\.github\.io$/i.test(location.hostname)) return "https://green-a-1.onrender.com";
   return location.origin;
 }
 
@@ -452,7 +452,7 @@ async function readJsonResponse(response) {
   if (!contentType.includes("application/json")) {
     const looksLikeHtml = /^\s*</.test(text);
     if (looksLikeHtml) {
-      throw new Error(`API вернул HTML-страницу вместо JSON. Сейчас frontend обращается к ${apiBase()}. Если сайт открыт на GitHub Pages, укажите backend Node-сервиса в config.js, например https://green-a.onrender.com.`);
+      throw new Error(`API вернул HTML-страницу вместо JSON. Сейчас frontend обращается к ${apiBase()}. Если сайт открыт на GitHub Pages, укажите backend Node-сервиса в config.js, например https://green-a-1.onrender.com.`);
     }
     throw new Error(`API вернул не JSON (${contentType || "без content-type"}).`);
   }

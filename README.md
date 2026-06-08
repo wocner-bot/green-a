@@ -78,7 +78,7 @@ Recommended setup:
 2. Copy the Render URL, for example:
 
 ```text
-https://green-a.onrender.com
+https://green-a-1.onrender.com
 ```
 
 3. If your Render URL differs, edit `config.js`:
@@ -91,7 +91,7 @@ window.GREEN_A_CONFIG = {
 
 4. Commit and push `config.js`.
 
-When the app is opened from `*.github.io`, it automatically tries `https://green-a.onrender.com` unless `config.js` contains another `apiBase`.
+When the app is opened from `*.github.io`, it automatically tries `https://green-a-1.onrender.com` unless `config.js` contains another `apiBase`.
 
 ## Environment
 
@@ -119,7 +119,7 @@ QWEN_VL_MODEL=qwen3-vl-plus
 AI_ANALYSIS_PROVIDER=local|openai|hybrid
 OPENAI_API_KEY=...
 OPENAI_BASE_URL=https://api.openai.com/v1
-OPENAI_MODEL=gpt-5.2
+OPENAI_MODEL=gpt-4.1-mini
 ```
 
 Render fields to fill manually:
@@ -149,7 +149,7 @@ QWEN_VL_MIN_SCENE_GAP_SECONDS=20
 AI_ANALYSIS_PROVIDER=hybrid
 OPENAI_API_KEY=...
 OPENAI_BASE_URL=https://api.openai.com/v1
-OPENAI_MODEL=gpt-5.2
+OPENAI_MODEL=gpt-4.1-mini
 OPENAI_TIMEOUT_MS=30000
 AI_ANALYSIS_MAX_TRANSCRIPT_WORDS=5000
 ```
