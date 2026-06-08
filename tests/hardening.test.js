@@ -257,6 +257,47 @@ test('Qwen-VL visual understanding merges into OCR fallback text without losing 
   assert.equal(ocr.frames[1].source, 'qwen-vl');
 });
 
+test('OpenAI education analysis normalization keeps structured filter fields', () => {
+  const serverSource = fs.readFileSync(path.resolve(__dirname, '..', 'server.js'), 'utf8');
+  const snippet = [
+    extractFunctionSource(serverSource, 'clamp'),
+    extractFunctionSource(serverSource, 'cleanSegmentText'),
+    extractFunctionSource(serverSource, 'uniqueWarnings'),
+    extractFunctionSource(serverSource, 'cleanStringArray'),
+    extractFunctionSource(serverSource, 'normalizeOpenAiEducationResult'),
+    'module.exports = { normalizeOpenAiEducationResult };'
+  ].join('\n\n');
+
+  const sandbox = { module: { exports: {} }, exports: {} };
+  vm.createContext(sandbox);
+  vm.runInContext(snippet, sandbox);
+
+  const { normalizeOpenAiEducationResult } = sandbox.module.exports;
+  const result = normalizeOpenAiEducationResult({
+    education_score: 84,
+    class: 'educational',
+    confidence: 'high',
+    subject_area: 'languages',
+    is_learning_format: true,
+    teaching_markers: ['lesson', 'обучение', 'lesson'],
+    marketing_flags: ['quick promise'],
+    genre_flags: [],
+    reasoning_summary: 'Structured language lesson with examples and practice.'
+  }, { model: 'gpt-test' });
+
+  assert.equal(result.available, true);
+  assert.equal(result.provider, 'openai');
+  assert.equal(result.model, 'gpt-test');
+  assert.equal(result.educationScore, 84);
+  assert.equal(result.classification, 'educational');
+  assert.equal(result.confidence, 'high');
+  assert.equal(result.subjectArea, 'languages');
+  assert.equal(result.isLearningFormat, true);
+  assert.equal(JSON.stringify(result.teachingMarkers), JSON.stringify(['lesson', 'обучение']));
+  assert.equal(JSON.stringify(result.marketingFlags), JSON.stringify(['quick promise']));
+  assert.equal(result.reasoningSummary, 'Structured language lesson with examples and practice.');
+});
+
 test('Educational fit logic in app.js matches lib implementation', () => {
   const appSource = fs.readFileSync(path.resolve(__dirname, '..', 'app.js'), 'utf8');
   const { assessEducationalFit: assessFromLib } = require('../lib/educationalFit.js');

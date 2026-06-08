@@ -485,6 +485,10 @@ function mediaAnalysisLines(media = null) {
     const visual = media.visualUnderstanding;
     rows.push(`Vision: ${visual.available ? "Qwen-VL проанализировал кадры" : "недоступно"}; provider ${visual.provider || "local"}; модель ${visual.model || "н/д"}; кадров ${visual.framesAnalyzed || 0}; тип ${visual.screenType || "unknown"}; visual learning ${visual.visualLearningScore ?? 0}/10. ${visual.summary || ""} ${(visual.warnings || []).join(" ")}`);
   }
+  if (media.aiEducation) {
+    const ai = media.aiEducation;
+    rows.push(`AI Education: ${ai.available ? "OpenAI проанализировал формат" : "недоступно"}; class ${ai.classification || "н/д"}; score ${ai.educationScore ?? "н/д"}/100; confidence ${ai.confidence || "н/д"}; subject ${ai.subjectArea || "other"}. ${ai.reasoningSummary || ""} ${(ai.warnings || []).join(" ")}`);
+  }
   return rows.filter((row) => row.trim());
 }
 
@@ -547,7 +551,8 @@ async function fetchYouTubeData() {
       payload.source?.audioAnalyzed ? "аудио" : "",
       payload.source?.videoAnalyzed ? "видео" : "",
       payload.source?.ocrAnalyzed ? "OCR" : "",
-      payload.source?.visionAnalyzed ? "vision" : ""
+      payload.source?.visionAnalyzed ? "vision" : "",
+      payload.source?.aiAnalyzed ? "AI" : ""
     ].filter(Boolean);
     const mediaMessage = mediaParts.length ? `, медиа-анализ: ${mediaParts.join(" + ")}` : "";
     const visualMessage = payload.visualObservations?.length ? `, визуальных наблюдений: ${payload.visualObservations.length}` : "";
@@ -658,6 +663,40 @@ function calculateScores(video = null) {
     visualInstructionHits,
     visualFallbackActive
   });
+  const aiEducation = mediaAnalysis?.aiEducation || null;
+  const aiEducationalBoost = aiEducation?.available && aiEducation.classification === "educational" && Number(aiEducation.educationScore || 0) >= 61;
+  const aiUncertainBoost = aiEducation?.available && aiEducation.classification === "uncertain" && Number(aiEducation.educationScore || 0) >= 45;
+  const adjustedEducationalFit = aiEducationalBoost
+    ? {
+      ...educationalFit,
+      eligible: true,
+      weak: false,
+      uncertain: false,
+      exclude: false,
+      classification: "educational",
+      confidence: aiEducation.confidence === "high" ? "high" : educationalFit.confidence,
+      score: Math.max(Number(educationalFit.score || 0), Math.round((Number(aiEducation.educationScore || 0) / 10) * 10) / 10),
+      reasons: [
+        ...educationalFit.reasons.filter((reason) => !/не хватает признаков|недостаточно учебной механики|пограничный случай/i.test(reason)),
+        `OpenAI Education Filter: ${aiEducation.educationScore}/100, ${aiEducation.reasoningSummary || "обучающий формат подтвержден AI-анализом"}`
+      ]
+    }
+    : (aiUncertainBoost && educationalFit.exclude
+      ? {
+        ...educationalFit,
+        eligible: false,
+        weak: true,
+        uncertain: true,
+        exclude: false,
+        classification: "uncertain",
+        confidence: "medium",
+        score: Math.max(Number(educationalFit.score || 0), 5.5),
+        reasons: [
+          ...educationalFit.reasons,
+          `OpenAI Education Filter перевел ролик в uncertain: ${aiEducation.educationScore}/100`
+        ]
+      }
+      : educationalFit);
   const curriculumTheoryLesson = educationalFit.eligible &&
     !salesHits &&
     !promiseHits &&
@@ -677,9 +716,9 @@ function calculateScores(video = null) {
     technical: clamp((data.audio * 0.32) + (data.video * 0.36) + (data.slides * 0.28) + (visualQuality ? Math.max(0, visualQuality - 5) * 0.08 : 0)),
     communication: clamp((data.pace * 0.45) + (data.audio * 0.22) + structureHits * 0.25 + (visualObservations.length ? 0.35 : 0) + 1.2)
   };
-  scores.educationalFitScore = educationalFit.score;
+  scores.educationalFitScore = adjustedEducationalFit.score;
 
-  return { scores, data, flags: { salesHits, promiseHits, sourceHits, practiceHits, textLength, educationalFit, segmentQuality, visualQuality, visualObservationCount: visualObservations.length, visualFallbackActive, mediaAudioMeasured: Boolean(mediaAnalysis?.audio?.available), mediaVideoMeasured: Boolean(mediaAnalysis?.video?.available), curriculumTheoryLesson } };
+  return { scores, data, flags: { salesHits, promiseHits, sourceHits, practiceHits, textLength, educationalFit: adjustedEducationalFit, aiEducation, segmentQuality, visualQuality, visualObservationCount: visualObservations.length, visualFallbackActive, mediaAudioMeasured: Boolean(mediaAnalysis?.audio?.available), mediaVideoMeasured: Boolean(mediaAnalysis?.video?.available), curriculumTheoryLesson } };
 }
 
 function analyzeVideo(video) {
@@ -1636,7 +1675,19 @@ function exportRatingData() {
         ["vision", "educationalSignals", (video.mediaAnalysis?.visualUnderstanding?.educationalSignals || []).join("; ")],
         ["vision", "negativeSignals", (video.mediaAnalysis?.visualUnderstanding?.negativeSignals || []).join("; ")],
         ["vision", "summary", video.mediaAnalysis?.visualUnderstanding?.summary || ""],
-        ["vision", "warnings", (video.mediaAnalysis?.visualUnderstanding?.warnings || []).join("; ")]
+        ["vision", "warnings", (video.mediaAnalysis?.visualUnderstanding?.warnings || []).join("; ")],
+        ["aiEducation", "available", Boolean(video.mediaAnalysis?.aiEducation?.available)],
+        ["aiEducation", "provider", video.mediaAnalysis?.aiEducation?.provider || ""],
+        ["aiEducation", "model", video.mediaAnalysis?.aiEducation?.model || ""],
+        ["aiEducation", "educationScore", video.mediaAnalysis?.aiEducation?.educationScore ?? ""],
+        ["aiEducation", "classification", video.mediaAnalysis?.aiEducation?.classification || ""],
+        ["aiEducation", "confidence", video.mediaAnalysis?.aiEducation?.confidence || ""],
+        ["aiEducation", "subjectArea", video.mediaAnalysis?.aiEducation?.subjectArea || ""],
+        ["aiEducation", "teachingMarkers", (video.mediaAnalysis?.aiEducation?.teachingMarkers || []).join("; ")],
+        ["aiEducation", "marketingFlags", (video.mediaAnalysis?.aiEducation?.marketingFlags || []).join("; ")],
+        ["aiEducation", "genreFlags", (video.mediaAnalysis?.aiEducation?.genreFlags || []).join("; ")],
+        ["aiEducation", "summary", video.mediaAnalysis?.aiEducation?.reasoningSummary || ""],
+        ["aiEducation", "warnings", (video.mediaAnalysis?.aiEducation?.warnings || []).join("; ")]
       ]
     },
     {

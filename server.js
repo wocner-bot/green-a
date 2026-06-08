@@ -11,6 +11,7 @@ const host = process.env.HOST || "0.0.0.0";
 const youtubeApiKey = String(process.env.YOUTUBE_API_KEY || "").trim();
 const videoAnalysisProvider = String(process.env.VIDEO_ANALYSIS_PROVIDER || "local").trim().toLowerCase();
 const visionAnalysisProvider = String(process.env.VISION_ANALYSIS_PROVIDER || "local").trim().toLowerCase();
+const aiAnalysisProvider = String(process.env.AI_ANALYSIS_PROVIDER || "local").trim().toLowerCase();
 
 function envInt(name, fallback) {
   const value = Number(process.env[name]);
@@ -43,6 +44,14 @@ const qwenVlConfig = {
   timeoutMs: envInt("QWEN_VL_TIMEOUT_MS", 30000),
   maxImageWidth: envInt("QWEN_VL_MAX_IMAGE_WIDTH", 1280),
   minSceneGapSeconds: envInt("QWEN_VL_MIN_SCENE_GAP_SECONDS", 20)
+};
+
+const openAiConfig = {
+  apiKey: String(process.env.OPENAI_API_KEY || "").trim(),
+  baseUrl: String(process.env.OPENAI_BASE_URL || "https://api.openai.com/v1").replace(/\/+$/, ""),
+  model: String(process.env.OPENAI_MODEL || "gpt-5.2").trim(),
+  timeoutMs: envInt("OPENAI_TIMEOUT_MS", 30000),
+  maxTranscriptWords: envInt("AI_ANALYSIS_MAX_TRANSCRIPT_WORDS", 5000)
 };
 
 const mime = {
@@ -1825,6 +1834,178 @@ async function analyzeFramesViaQwenVl({ videoUrl, pageUrl, title, duration, segm
   });
 }
 
+function sampleWords(text = "", maxWords = openAiConfig.maxTranscriptWords) {
+  const words = String(text || "").replace(/\s+/g, " ").trim().split(/\s+/).filter(Boolean);
+  if (words.length <= maxWords) return words.join(" ");
+  const head = words.slice(0, Math.floor(maxWords * 0.45));
+  const remaining = words.slice(head.length);
+  const chunkSize = Math.floor((maxWords - head.length) / 3);
+  const chunks = [0.35, 0.6, 0.85].flatMap((ratio) => {
+    const start = Math.max(0, Math.min(remaining.length - chunkSize, Math.floor(remaining.length * ratio)));
+    return remaining.slice(start, start + chunkSize);
+  });
+  return [...head, ...chunks].slice(0, maxWords).join(" ");
+}
+
+function openAiEducationSchema() {
+  return {
+    type: "object",
+    additionalProperties: false,
+    required: [
+      "education_score",
+      "class",
+      "confidence",
+      "subject_area",
+      "is_learning_format",
+      "teaching_markers",
+      "marketing_flags",
+      "genre_flags",
+      "reasoning_summary"
+    ],
+    properties: {
+      education_score: { type: "integer", minimum: 0, maximum: 100 },
+      class: { type: "string", enum: ["non-educational", "uncertain", "educational"] },
+      confidence: { type: "string", enum: ["low", "medium", "high"] },
+      subject_area: { type: "string", enum: ["STEM", "languages", "business", "humanities", "applied", "arts", "other"] },
+      is_learning_format: { type: "boolean" },
+      teaching_markers: { type: "array", items: { type: "string" } },
+      marketing_flags: { type: "array", items: { type: "string" } },
+      genre_flags: { type: "array", items: { type: "string" } },
+      reasoning_summary: { type: "string" }
+    }
+  };
+}
+
+function openAiEducationPrompt() {
+  return [
+    "You are the Green Argus Education Filter.",
+    "Decide whether a YouTube video has an educational format, not whether it is high quality.",
+    "Prioritize explicit learning intent markers: обучение, урок, уроки, научить, learn, teach, lesson, tutorial, course, how to, guide, workshop, training, and equivalents in other languages.",
+    "Marketing, quick promises, and sales language are flags for the quality evaluator. Do not reject a video solely because of marketing if it has a real teaching core.",
+    "How-to instructions and practical step-by-step guides count as educational format.",
+    "Entertainment, music, movies, vlogs, pranks, reactions, and gameplay are non-educational unless they contain a noticeable teaching core.",
+    "Return only the JSON object matching the schema."
+  ].join("\n");
+}
+
+function extractOpenAiOutputText(payload = {}) {
+  if (typeof payload.output_text === "string") return payload.output_text;
+  const pieces = [];
+  for (const item of payload.output || []) {
+    for (const content of item.content || []) {
+      if (typeof content.text === "string") pieces.push(content.text);
+      if (typeof content.output_text === "string") pieces.push(content.output_text);
+    }
+  }
+  return pieces.join("\n");
+}
+
+function normalizeOpenAiEducationResult(raw = {}, context = {}) {
+  const classification = ["non-educational", "uncertain", "educational"].includes(raw.class)
+    ? raw.class
+    : "uncertain";
+  const confidence = ["low", "medium", "high"].includes(raw.confidence)
+    ? raw.confidence
+    : "medium";
+  const subjectArea = ["STEM", "languages", "business", "humanities", "applied", "arts", "other"].includes(raw.subject_area)
+    ? raw.subject_area
+    : "other";
+  const educationScore = Math.round(clamp(raw.education_score ?? 50, 0, 100));
+  const reasoningSummary = cleanSegmentText(raw.reasoning_summary || "").slice(0, 700);
+  const teachingMarkers = cleanStringArray(raw.teaching_markers, 18);
+  const marketingFlags = cleanStringArray(raw.marketing_flags, 12);
+  const genreFlags = cleanStringArray(raw.genre_flags, 12);
+  return {
+    available: true,
+    provider: "openai",
+    model: context.model || openAiConfig.model,
+    educationScore,
+    classification,
+    confidence,
+    subjectArea,
+    isLearningFormat: Boolean(raw.is_learning_format),
+    teachingMarkers,
+    marketingFlags,
+    genreFlags,
+    reasoningSummary,
+    warnings: uniqueWarnings(context.warnings || [])
+  };
+}
+
+function unavailableOpenAiEducationResult(warnings = []) {
+  return {
+    available: false,
+    provider: "openai",
+    model: openAiConfig.model,
+    educationScore: null,
+    classification: "",
+    confidence: "low",
+    subjectArea: "other",
+    isLearningFormat: false,
+    teachingMarkers: [],
+    marketingFlags: [],
+    genreFlags: [],
+    reasoningSummary: "",
+    warnings: uniqueWarnings(warnings)
+  };
+}
+
+function canUseOpenAiAnalysis() {
+  if (!["openai", "hybrid"].includes(aiAnalysisProvider)) return false;
+  return Boolean(openAiConfig.apiKey && openAiConfig.baseUrl && openAiConfig.model);
+}
+
+function buildOpenAiAnalysisInput({ title, description, transcript, ocr, visualText, segments, topicClassification }) {
+  return {
+    title,
+    description,
+    transcript_sample: sampleWords(transcript, openAiConfig.maxTranscriptWords),
+    ocr_and_visual_sample: sampleWords(`${ocr || ""}\n${visualText || ""}`, 1500),
+    topic: topicClassification?.label || "",
+    topic_confidence: topicClassification?.confidence || "",
+    segments: (segments || []).slice(0, 18).map((segment) => ({
+      time: segment.time || "",
+      type: segment.type || "",
+      note: cleanSegmentText(segment.note || "").slice(0, 220),
+      evidence: cleanSegmentText(segment.evidence || "").slice(0, 160)
+    }))
+  };
+}
+
+async function analyzeEducationViaOpenAi(input = {}) {
+  if (!canUseOpenAiAnalysis()) {
+    if (["openai", "hybrid"].includes(aiAnalysisProvider)) {
+      return unavailableOpenAiEducationResult(["OpenAI AI-анализ не включен: задайте AI_ANALYSIS_PROVIDER=openai|hybrid и OPENAI_API_KEY."]);
+    }
+    return unavailableOpenAiEducationResult([]);
+  }
+  const payload = await fetchJson(`${openAiConfig.baseUrl}/responses`, {
+    method: "POST",
+    timeoutMs: openAiConfig.timeoutMs,
+    headers: {
+      Authorization: `Bearer ${openAiConfig.apiKey}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      model: openAiConfig.model,
+      input: [
+        { role: "system", content: openAiEducationPrompt() },
+        { role: "user", content: JSON.stringify(input) }
+      ],
+      text: {
+        format: {
+          type: "json_schema",
+          name: "green_argus_education_filter",
+          strict: true,
+          schema: openAiEducationSchema()
+        }
+      }
+    })
+  });
+  const parsed = parseJsonObjectFromText(extractOpenAiOutputText(payload));
+  return normalizeOpenAiEducationResult(parsed, { model: openAiConfig.model });
+}
+
 async function fetchYouTubeApiData(videoId) {
   if (!youtubeApiKey) return null;
   const apiUrl = `https://www.googleapis.com/youtube/v3/videos?part=snippet,contentDetails,statistics&id=${encodeURIComponent(videoId)}&key=${encodeURIComponent(youtubeApiKey)}`;
@@ -2266,6 +2447,23 @@ async function analyzeYouTube(inputUrl, mode = "stream") {
     transcript,
     ocr: `${mediaAnalysis.ocr?.text || ""}\n${visualText}`
   });
+  let aiEducationAnalysis = unavailableOpenAiEducationResult([]);
+  if (["openai", "hybrid"].includes(aiAnalysisProvider)) {
+    try {
+      aiEducationAnalysis = await analyzeEducationViaOpenAi(buildOpenAiAnalysisInput({
+        title,
+        description: `${description}\n${chapterText}`,
+        transcript,
+        ocr: mediaAnalysis.ocr?.text || "",
+        visualText,
+        segments,
+        topicClassification
+      }));
+    } catch (error) {
+      aiEducationAnalysis = unavailableOpenAiEducationResult([`OpenAI AI-анализ недоступен: ${error.message}`]);
+    }
+  }
+  mediaAnalysis.aiEducation = aiEducationAnalysis;
   const ocrWarningText = (mediaAnalysis.ocr?.warnings || []).join(" ");
   const limitations = [
     mediaAnalysis.ocr?.available
@@ -2287,8 +2485,21 @@ async function analyzeYouTube(inputUrl, mode = "stream") {
     mediaAnalysis.video?.available
       ? "визуальные метрики отражают яркость и контраст, но не заменяют полноценную vision-модель"
       : "качество видео оценено предварительно по доступным косвенным сигналам",
+    aiEducationAnalysis.available
+      ? "AI-анализ OpenAI используется как дополнительный классификатор образовательного формата; эвристики остаются fallback"
+      : (aiEducationAnalysis.warnings?.join(" ") || ""),
     "комментарии YouTube не подключены; тематические таймкоды берутся из описания"
-  ];
+  ].filter(Boolean);
+  const aiText = aiEducationAnalysis.available
+    ? [
+      `OpenAI Education Filter: ${aiEducationAnalysis.classification}, score ${aiEducationAnalysis.educationScore}/100, confidence ${aiEducationAnalysis.confidence}.`,
+      `Предмет: ${aiEducationAnalysis.subjectArea}. Учебный формат: ${aiEducationAnalysis.isLearningFormat ? "да" : "нет"}.`,
+      aiEducationAnalysis.teachingMarkers.length ? `Учебные маркеры: ${aiEducationAnalysis.teachingMarkers.join(", ")}` : "",
+      aiEducationAnalysis.marketingFlags.length ? `Маркетинговые флаги: ${aiEducationAnalysis.marketingFlags.join(", ")}` : "",
+      aiEducationAnalysis.genreFlags.length ? `Жанровые флаги: ${aiEducationAnalysis.genreFlags.join(", ")}` : "",
+      aiEducationAnalysis.reasoningSummary ? `Объяснение: ${aiEducationAnalysis.reasoningSummary}` : ""
+    ].filter(Boolean).join("\n")
+    : (aiEducationAnalysis.warnings?.length ? `OpenAI Education Filter: ${aiEducationAnalysis.warnings.join(" ")}` : "");
   return {
     url: videoUrl,
     title,
@@ -2302,6 +2513,7 @@ async function analyzeYouTube(inputUrl, mode = "stream") {
       chapterText ? `\nГлавы из описания:\n${chapterText}` : "",
       topicClassification.label !== "Без темы" ? `\nТематика по данным ролика:\n${topicClassification.label}; уверенность: ${topicClassification.confidence}; признаки: ${topicClassification.evidence.join("; ") || "нет"}` : "\nТематика по данным ролика:\nне определена достаточно надежно",
       `\nМедиа-анализ:\n${audioText}\n${videoText}\n${ocrText}`,
+      aiText ? `\nAI-анализ:\n${aiText}` : "",
       visualText ? `\nВизуальные наблюдения по экрану:\n${visualText}` : ""
     ].filter(Boolean).join("\n"),
     audio: mediaAnalysis.audio?.available ? mediaAnalysis.audio.score : (transcript ? 7 : 5),
@@ -2336,8 +2548,11 @@ async function analyzeYouTube(inputUrl, mode = "stream") {
       ocrProvider,
       visionAnalyzed: Boolean(mediaAnalysis.visualUnderstanding?.available),
       visionProvider,
+      aiAnalyzed: Boolean(aiEducationAnalysis.available),
+      aiProvider: aiEducationAnalysis.available ? "openai" : (aiAnalysisProvider === "local" ? "local" : "openai"),
       configuredAnalysisProvider: videoAnalysisProvider,
       configuredVisionProvider: visionAnalysisProvider,
+      configuredAiProvider: aiAnalysisProvider,
       transcriptAvailable: Boolean(transcript),
       signals,
       limitations,

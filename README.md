@@ -116,6 +116,10 @@ VISION_ANALYSIS_PROVIDER=local|qwen|hybrid
 QWEN_VL_API_KEY=...
 QWEN_VL_BASE_URL=https://dashscope-intl.aliyuncs.com/compatible-mode/v1
 QWEN_VL_MODEL=qwen3-vl-plus
+AI_ANALYSIS_PROVIDER=local|openai|hybrid
+OPENAI_API_KEY=...
+OPENAI_BASE_URL=https://api.openai.com/v1
+OPENAI_MODEL=gpt-5.2
 ```
 
 Do not commit `.env` files with real secrets. The app can work without YouTube API key and without Azure settings, using public YouTube data and local fallback analysis.
@@ -130,6 +134,7 @@ The backend can run deeper media analysis when the host has the required command
 - Optional: Azure AI Video Indexer as OCR provider (`VIDEO_ANALYSIS_PROVIDER=azure`) with automatic fallback to local OCR if Azure is unavailable.
 - Hybrid OCR mode (`VIDEO_ANALYSIS_PROVIDER=hybrid`): runs Azure Video Indexer and local `tesseract`, then merges OCR signals for higher recall.
 - Optional: Qwen-VL visual understanding (`VISION_ANALYSIS_PROVIDER=qwen|hybrid`) analyzes sampled frames through Alibaba Cloud Model Studio / DashScope and adds slide/code/diagram/demo signals to the visual evidence.
+- Optional: OpenAI AI education-format analysis (`AI_ANALYSIS_PROVIDER=openai|hybrid`) reads title, description, captions, OCR and visual evidence, then returns a structured Education Filter result used as a fallback/boost for explicit learning formats.
 
 On Render, `packages.txt` asks the platform to install:
 
@@ -151,6 +156,7 @@ If these tools are missing, the app still works, but the response marks audio/vi
 - analyzes audio loudness, pauses and available speech timing through `ffmpeg`;
 - analyzes sampled video frames for brightness/contrast and optional OCR through `ffmpeg` + `tesseract`;
 - optionally analyzes sampled frames with Qwen-VL for visual teaching signals such as slides, code, charts and whiteboards;
+- optionally runs OpenAI structured AI analysis to classify the educational format and surface teaching markers, marketing flags and genre flags;
 - adds visual observations from screen, scene and OCR signals and uses them as a fallback when captions or speech are missing;
 - scores depth, pedagogy, structure, practice, reliability, complexity, technical quality and communication;
 - filters out clearly non-educational videos;
