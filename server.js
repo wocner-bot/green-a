@@ -1917,6 +1917,9 @@ function openAiEducationPrompt() {
     "How-to instructions and practical step-by-step guides count as educational format.",
     "Entertainment, music, movies, vlogs, pranks, reactions, and gameplay are non-educational unless they contain a noticeable teaching core.",
     "Technical lack of transcript or sparse metadata should usually lead to uncertain/manual review, not to non-educational, when learning intent is visible.",
+    "When transcript is missing, classify from title, description, chapters, OCR, and visual observations. Do not answer that transcript/evidence is insufficient if those fields contain explicit lesson/course/tutorial/how-to markers.",
+    "If title/description/OCR clearly say lesson, course, tutorial, how-to, guide, learning objective, example, exercise, formula, task, or step-by-step, treat that as valid educational evidence even with no transcript.",
+    "Use technical_status=sparse_data only as a limitation flag; it must not by itself lower class below uncertain when educational intent is visible.",
     "Score the components explicitly: learning objective 0-25, teaching structure 0-15, knowledge density 0-20, practical applicability 0-10, explanation density 0-10, visual learning 0-10, author intent 0-10.",
     "Set conflicting_profile=true when the profile is uneven: one major learning component is strong but another core component is zero.",
     "Set manual_review=true for sparse data, genre-conflict, language uncertainty, or borderline educational cases.",
@@ -1949,8 +1952,16 @@ function normalizeOpenAiEducationResult(raw = {}, context = {}) {
     ? raw.subject_area
     : "other";
   const educationScore = Math.round(clamp(raw.education_score ?? 50, 0, 100));
-  const reasoningSummary = cleanSegmentText(raw.reasoning_summary || "").slice(0, 700);
-  const evidenceSummary = cleanSegmentText(raw.evidence_summary || "").slice(0, 500);
+  const rawReasoningSummary = cleanSegmentText(raw.reasoning_summary || "").slice(0, 700);
+  const rawEvidenceSummary = cleanSegmentText(raw.evidence_summary || "").slice(0, 500);
+  const sparseRefusal = /transcript\s+or\s+evidence\s+was\s+insufficient|insufficient\s+(transcript|evidence|data)|not\s+enough\s+(transcript|evidence|data)|недостаточно\s+(транскрип|данн|свидетельств|доказательств)/i
+    .test(`${rawReasoningSummary} ${rawEvidenceSummary}`);
+  const reasoningSummary = sparseRefusal
+    ? "Транскрипта мало; Stage 1 дополнительно опирается на название, описание, главы, OCR и визуальные признаки."
+    : rawReasoningSummary;
+  const evidenceSummary = sparseRefusal
+    ? "Недостаток транскрипта отмечен как техническое ограничение, а не как отказ от классификации."
+    : rawEvidenceSummary;
   const teachingMarkers = cleanStringArray(raw.teaching_markers, 18);
   const marketingFlags = cleanStringArray(raw.marketing_flags, 12);
   const genreFlags = cleanStringArray(raw.genre_flags, 12);

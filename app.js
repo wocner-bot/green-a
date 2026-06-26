@@ -818,10 +818,11 @@ function nonEducationalPenaltyTotal(fit = {}, baseTotal = null) {
 function assessEducationalFit(data = {}, segments = [], signals = {}) {
   const description = String(data.description || "").toLowerCase();
   const transcriptText = String(data.transcript || "").toLowerCase();
+  const ocrText = String(data.ocr || "").toLowerCase();
   const title = (data.title || "").toLowerCase();
   const topic = String(data.topic || "").toLowerCase();
   const titleAndTopic = `${title} ${topic}`.toLowerCase();
-  const text = `${titleAndTopic}\n${description}\n${transcriptText}`;
+  const text = `${titleAndTopic}\n${description}\n${transcriptText}\n${ocrText}`;
   const segmentText = segments.map((segment) => `${segment.type || ""} ${segment.note || ""}`).join(" ").toLowerCase();
 
   const titleEducationHits = regexHits(title, [
@@ -845,14 +846,14 @@ function assessEducationalFit(data = {}, segments = [], signals = {}) {
     "guide", "walkthrough", "how to", "explained", "step by step", "с нуля", "для начинающих", "beginner", "from scratch",
     "lección", "leccion", "curso", "aprender", "enseñar", "ensenar", "formation", "cours", "apprendre", "lektion", "kurs", "lernen", "unterricht", "lezione", "corso", "imparare", "aula"
   ]);
-  const methodHits = countHits(`${description}\n${transcriptText}\n${segmentText}`, [
+  const methodHits = countHits(`${description}\n${transcriptText}\n${ocrText}\n${segmentText}`, [
     "разберем", "разбираем", "решим", "решаем", "покажу как", "пошаг", "разбор", "пример", "кейс", "формула", "алгоритм", "метод",
     "explain", "explained", "define", "definition", "step by step", "walkthrough", "demo", "demonstration", "solve", "solution"
   ]);
-  const practiceOrCheckHits = countHits(`${description}\n${transcriptText}\n${segmentText}`, [
+  const practiceOrCheckHits = countHits(`${description}\n${transcriptText}\n${ocrText}\n${segmentText}`, [
     "задание", "упражнение", "практик", "проверь", "проверка", "тест", "practice", "exercise", "quiz", "assignment", "homework", "check your answer"
   ]);
-  const goalHits = countHits(`${description}\n${transcriptText}`, [
+  const goalHits = countHits(`${description}\n${transcriptText}\n${ocrText}`, [
     "цель урока", "цель обучения", "упр", "результат обучения", "вы научитесь", "научу", "научить", "научиться", "навык",
     "learning objective", "goal of the lesson", "you will learn", "learn how to", "by the end of this lesson",
     "aprender", "apprendre", "lernen", "imparare"
@@ -899,7 +900,8 @@ function assessEducationalFit(data = {}, segments = [], signals = {}) {
 
   const transcriptWordCount = transcriptText.trim() ? transcriptText.trim().split(/\s+/).length : 0;
   const descriptionWordCount = description.trim() ? description.trim().split(/\s+/).length : 0;
-  const sparseMetadata = transcriptWordCount < 70 && descriptionWordCount < 35;
+  const ocrWordCount = ocrText.trim() ? ocrText.trim().split(/\s+/).length : 0;
+  const sparseMetadata = transcriptWordCount < 70 && (descriptionWordCount + ocrWordCount) < 35;
   const sparseEvidence = sparseMetadata && segments.length < 3;
 
   const hasLearningSegments = /практи|задани|упраж|пример|разбор|провер|exercise|assignment|example|practice|step by step|walkthrough/i.test(segmentText);
@@ -921,11 +923,16 @@ function assessEducationalFit(data = {}, segments = [], signals = {}) {
     "цель урока", "вы научитесь", "научу", "научить", "научиться", "пошаг", "разбор", "пример", "упражнение", "задание",
     "practice", "exercise", "lesson plan", "learning objective", "learn", "teach", "tutorial", "aprender", "apprendre", "lernen", "imparare"
   ]);
+  const ocrTeachingHits = countHits(ocrText, [
+    "цель урока", "план урока", "тема урока", "вы научитесь", "научу", "научить", "научиться", "пошаг", "разбор", "пример", "упражнение", "задание",
+    "формула", "теория", "решение", "проверка", "practice", "exercise", "lesson plan", "learning objective", "learn", "teach", "tutorial", "example", "step by step"
+  ]);
   const transcriptTeachingHits = countHits(transcriptText, [
     "цель урока", "вы научитесь", "научу", "научить", "научиться", "пошаг", "разбор", "пример", "упражнение", "задание", "проверка",
     "practice", "exercise", "assignment", "quiz", "step by step", "learn", "teach", "tutorial", "aprender", "apprendre", "lernen", "imparare"
   ]);
-  const totalTeachingEvidence = titleTeachingHits + Math.min(3, descriptionTeachingHits) + Math.min(4, transcriptTeachingHits) + (hasCourseLikeStructure ? 1 : 0);
+  const metadataTeachingHits = descriptionTeachingHits + ocrTeachingHits;
+  const totalTeachingEvidence = titleTeachingHits + Math.min(3, descriptionTeachingHits) + Math.min(3, ocrTeachingHits) + Math.min(4, transcriptTeachingHits) + (hasCourseLikeStructure ? 1 : 0);
 
   const hasInstructionalFormat = formatHits > 0 || /урок|курс|обуч|науч|tutorial|lesson|course|learn|teach/i.test(title) || hasHowToTitle || hasFromScratchTitle;
   const explicitEducationalTitle = /урок|заняти|лекци|курс|семинар|вебинар|мастер-?класс|tutorial|lesson|course|lecture|workshop|webinar|training|обуч|учеб|науч|разбор|гайд|guide|how to|learn|teach|explained|walkthrough|lecci[oó]n|curso|aprender|formation|cours|lektion|kurs|lezione|corso/i.test(title);
@@ -943,7 +950,7 @@ function assessEducationalFit(data = {}, segments = [], signals = {}) {
   const hasStrongTitleIntent = titleEducationHits >= 1 || titleTeachingHits >= 1 || hasHowToTitle || hasFromScratchTitle;
   const hasBaselineTeachingEvidence = totalTeachingEvidence >= 2 || (hasStrongTitleIntent && (subjectMatterHits > 0 || mechanicsCount >= 1));
   const hasRescueTeachingPattern = hasStrongTitleIntent &&
-    (descriptionTeachingHits >= 1 || transcriptTeachingHits >= 1 || hasCourseLikeStructure || hasLearningSegments) &&
+    (metadataTeachingHits >= 1 || transcriptTeachingHits >= 1 || hasCourseLikeStructure || hasLearningSegments || hasVisualTeachingCore) &&
     (hasOutcomeSignal || mechanicsCount >= 1) &&
     hardNonLearningHits < 2 &&
     titleMediaMarkers === 0 &&
@@ -1014,7 +1021,7 @@ function assessEducationalFit(data = {}, segments = [], signals = {}) {
     ((isSalesHeavy || isSelfHelpMotivational || isAggressiveMarketing || isOverviewWithoutTeachingCore || isSalesLeadWithoutPractice || isCourseOverviewSales || isClearlyEntertainment || isStrongSalesNoTeaching) && !hasEducationalSignal && hardNegativeCount >= 2);
   const educational = !nonEducational && (
     (score >= 6 && mechanicsCount >= 2 && hasEducationalSignal && hasOutcomeSignal && hardNonLearningHits < 3 && titleMediaMarkers === 0) ||
-    (score >= 5.2 && titleTeachingHits >= 1 && descriptionTeachingHits >= 2 && hardNonLearningHits < 3 && !isSalesHeavy) ||
+    (score >= 5.2 && titleTeachingHits >= 1 && metadataTeachingHits >= 2 && hardNonLearningHits < 3 && !isSalesHeavy) ||
     (score >= 5.2 && hasStrongTeachingCore && learningEvidence >= 3 && hardNegativeCount <= 1) ||
     (score >= 4.9 && hasStrongTitleIntent && hasBaselineTeachingEvidence && (hasOutcomeSignal || mechanicsCount >= 2) && hardNegativeCount === 0 && !isClearlyEntertainment)
   );

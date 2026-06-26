@@ -203,6 +203,22 @@ test('Includes practical how-to instruction as educational format', () => {
   assert.equal(result.classification, 'educational', 'Concrete how-to should classify as educational');
 });
 
+test('Uses OCR evidence when transcript is missing', () => {
+  const data = {
+    title: 'Урок физики: закон Ома и решение задач',
+    description: '',
+    transcript: '',
+    ocr: 'Тема урока: закон Ома. Формула I = U / R. Пример решения задачи. Упражнение для проверки.'
+  };
+  const result = assessEducationalFit(data, [
+    { time: '00:00-00:40', type: 'слайды', note: 'формула и пример на экране', source: 'media' },
+    { time: '00:40-01:20', type: 'пример', note: 'решение задачи', source: 'media' },
+    { time: '01:20-02:00', type: 'практика', note: 'упражнение для проверки', source: 'media' }
+  ], { visualObservationCount: 3, visualInstructionHits: 3 });
+  assert.equal(result.exclude, false, 'OCR with lesson/formula/example/practice should pass Stage 1');
+  assert.equal(result.classification, 'educational', 'OCR-supported lesson should classify as educational');
+});
+
 test('Excludes satirical film review even if transcript contains incidental educational words', () => {
   const data = {
     title: '[BadComedian] - РЖАКА С КОЗЛОВСКИМ И ГАЛУСТЯНОМ (Российская комедия в 2026 году)',

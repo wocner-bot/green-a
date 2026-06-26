@@ -298,6 +298,42 @@ test('OpenAI education analysis normalization keeps structured filter fields', (
   assert.equal(result.reasoningSummary, 'Structured language lesson with examples and practice.');
 });
 
+test('OpenAI sparse-data refusal is normalized as a limitation', () => {
+  const serverSource = fs.readFileSync(path.resolve(__dirname, '..', 'server.js'), 'utf8');
+  const snippet = [
+    extractFunctionSource(serverSource, 'clamp'),
+    extractFunctionSource(serverSource, 'cleanSegmentText'),
+    extractFunctionSource(serverSource, 'uniqueWarnings'),
+    extractFunctionSource(serverSource, 'cleanStringArray'),
+    extractFunctionSource(serverSource, 'normalizeOpenAiEducationResult'),
+    'module.exports = { normalizeOpenAiEducationResult };'
+  ].join('\n\n');
+
+  const sandbox = { module: { exports: {} }, exports: {} };
+  vm.createContext(sandbox);
+  vm.runInContext(snippet, sandbox);
+
+  const { normalizeOpenAiEducationResult } = sandbox.module.exports;
+  const result = normalizeOpenAiEducationResult({
+    education_score: 42,
+    class: 'uncertain',
+    confidence: 'low',
+    subject_area: 'STEM',
+    is_learning_format: false,
+    teaching_markers: [],
+    marketing_flags: [],
+    genre_flags: [],
+    reasoning_summary: 'Transcript or evidence was insufficient to classify this video reliably.',
+    evidence_summary: 'Insufficient evidence.',
+    technical_status: 'sparse_data'
+  }, { model: 'gpt-test' });
+
+  assert.equal(result.technicalStatus, 'sparse_data');
+  assert.match(result.reasoningSummary, /Stage 1/);
+  assert.doesNotMatch(result.reasoningSummary, /Transcript or evidence was insufficient/i);
+  assert.doesNotMatch(result.evidenceSummary, /Insufficient evidence/i);
+});
+
 test('OpenAI education analysis normalization keeps v2.4 component and review flags', () => {
   const serverSource = fs.readFileSync(path.resolve(__dirname, '..', 'server.js'), 'utf8');
   const snippet = [
